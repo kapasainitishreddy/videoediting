@@ -62,7 +62,8 @@ function AnalyzeInner() {
           samples,
         });
 
-        // Optional AI enrichment when a MiniMax key is configured
+        // Optional AI enrichment — same normalized shape regardless of
+        // whether MiniMax, Anthropic, or OpenAI is configured
         try {
           const res = await fetch("/api/ai", {
             method: "POST",

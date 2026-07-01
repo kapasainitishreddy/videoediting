@@ -68,7 +68,9 @@ export default function EditorPage() {
       setBusy("Building your edit…");
       const p = autoEdit(blueprint, clips, direction);
 
-      // Optional AI refinement when a MiniMax key is configured
+      // Optional AI refinement — works identically no matter which key
+      // (MiniMax/Anthropic/OpenAI) is configured in .env.local, since the
+      // API route normalizes every provider's reply to the same schema.
       try {
         const res = await fetch("/api/ai", {
           method: "POST",
@@ -79,7 +81,7 @@ export default function EditorPage() {
         if (j.available && j.result?.segments?.length) {
           p.segments = j.result.segments;
           p.colorGrade = j.result.colorGrade ?? p.colorGrade;
-          p.explanation += " Refined by AI.";
+          p.explanation += ` Refined by AI (${j.provider}).`;
         }
       } catch {
         // best-effort
