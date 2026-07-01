@@ -1,0 +1,333 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { v4 as uuid } from "uuid";
+import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan } from "@/lib/storage";
+import { probeDuration, makeThumbnail, renderEdit } from "@/lib/ffmpeg-client";
+import { autoEdit } from "@/lib/auto-edit";
+import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
+import { useProject } from "@/store/project";
+import type { TransitionType, UserClip } from "@/lib/types";
+
+const PROMPT_IDEAS = [
+  "make it cinematic",
+  "fast cuts, high energy",
+  "smooth zoom transitions",
+  "warm travel vibe",
+  "calm & aesthetic",
+  "edgy glitch style",
+];
+
+export default function EditorPage() {
+  const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, setRenderedUrl } = useProject();
+
+  const [direction, setDirection] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [renderPct, setRenderPct] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
+
+  // Restore clips saved in IndexedDB on reload
+  useEffect(() => {
+    if (clips.length === 0) {
+      listClipMetas().then((metas) => metas.length && setClips(metas)).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleFiles(files: FileList) {
+    setError(null);
+    for (const f of Array.from(files)) {
+      setBusy(`Adding ${f.name}…`);
+      try {
+        const id = uuid();
+        const [duration, thumbnail] = await Promise.all([probeDuration(f), makeThumbnail(f)]);
+        await saveVideo(id, f, f.name);
+        const clip: UserClip = { id, name: f.name, duration, thumbnail };
+        await saveClipMeta(clip);
+        addClip(clip);
+      } catch {
+        setError(`Couldn't read ${f.name}`);
+      }
+    }
+    setBusy(null);
+  }
+
+  async function handleRemoveClip(id: string) {
+    removeClip(id);
+    await Promise.all([deleteClipMeta(id), deleteVideo(id)]);
+  }
+
+  async function handleAutoEdit() {
+    setError(null);
+    try {
+      setBusy("Building your edit…");
+      const p = autoEdit(blueprint, clips, direction);
+
+      // Optional AI refinement when a MiniMax key is configured
+      try {
+        const res = await fetch("/api/ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task: "edit-directions", payload: { direction, plan: p } }),
+        });
+        const j = await res.json();
+        if (j.available && j.result?.segments?.length) {
+          p.segments = j.result.segments;
+          p.colorGrade = j.result.colorGrade ?? p.colorGrade;
+          p.explanation += " Refined by AI.";
+        }
+      } catch {
+        // best-effort
+      }
+
+      setPlan(p);
+      await savePlan("current", p);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Auto-edit failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function setTransition(segIndex: number, t: TransitionType) {
+    if (!plan) return;
+    const segments = plan.segments.map((s, i) => (i === segIndex ? { ...s, transitionAfter: t } : s));
+    setPlan({ ...plan, segments });
+    setPickerFor(null);
+  }
+
+  async function handleRender() {
+    if (!plan) return;
+    setError(null);
+    setBusy("Rendering…");
+    setRenderPct(0);
+    try {
+      const blobs = new Map<string, Blob>();
+      for (const seg of plan.segments) {
+        if (!blobs.has(seg.clipId)) {
+          const v = await getVideo(seg.clipId);
+          if (!v) throw new Error("A clip is missing from storage");
+          blobs.set(seg.clipId, v.blob);
+        }
+      }
+      const out = await renderEdit(blobs, plan.segments, plan.colorGrade, (pct, msg) => {
+        setRenderPct(pct);
+        setBusy(msg);
+      });
+      const url = URL.createObjectURL(out);
+      setRenderedUrl(url);
+      router.push("/export");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Render failed — try shorter clips");
+      setBusy(null);
+    }
+  }
+
+  return (
+    <main className="flex flex-1 flex-col px-6 pb-10 pt-12">
+      <header className="mb-6">
+        <p className="text-xs font-bold uppercase tracking-widest text-accent">Step 2 — your clips</p>
+        <h1 className="mt-1 text-2xl font-extrabold">Build your edit</h1>
+        {blueprint ? (
+          <p className="mt-1 text-sm text-neutral-400">
+            Matching “{blueprint.sourceName}” — {blueprint.transitions.length} transitions, {blueprint.style.pacing} pacing
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-neutral-400">No reference loaded — I'll use a classic viral pattern.</p>
+        )}
+      </header>
+
+      {/* Clips shelf */}
+      <section>
+        <div className="flex gap-3 overflow-x-auto pb-2">
+          {clips.map((c) => (
+            <div key={c.id} className="relative shrink-0">
+              {c.thumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={c.thumbnail} alt={c.name} className="h-28 w-20 rounded-xl object-cover" />
+              ) : (
+                <div className="stripes h-28 w-20 rounded-xl" />
+              )}
+              <button
+                onClick={() => handleRemoveClip(c.id)}
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-neutral-800 p-1"
+                aria-label={`Remove ${c.name}`}
+              >
+                <X size={12} />
+              </button>
+              <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 font-mono text-[10px]">
+                {c.duration.toFixed(1)}s
+              </span>
+            </div>
+          ))}
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="flex h-28 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-neutral-700 text-neutral-500 active:border-accent"
+          >
+            <Plus size={20} className="text-accent" />
+            <span className="text-[10px]">Add clip</span>
+          </button>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="video/*"
+          multiple
+          hidden
+          onChange={(e) => e.target.files && handleFiles(e.target.files)}
+        />
+      </section>
+
+      {/* AI direction */}
+      <section className="card mt-5 p-4">
+        <div className="flex items-center gap-2 text-sm font-bold">
+          <Sparkles size={15} className="text-accent" /> Direct the AI
+        </div>
+        <textarea
+          value={direction}
+          onChange={(e) => setDirection(e.target.value)}
+          placeholder="e.g. make it cinematic with smooth transitions, cut on every beat…"
+          rows={2}
+          className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
+        />
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {PROMPT_IDEAS.map((p) => (
+            <button
+              key={p}
+              onClick={() => setDirection(p)}
+              className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400 active:border-accent"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={handleAutoEdit}
+          disabled={!!busy || clips.length === 0}
+          className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
+        >
+          <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
+        </button>
+      </section>
+
+      {/* Timeline */}
+      {plan && (
+        <section className="mt-5">
+          <h2 className="mb-2 text-sm font-bold">Timeline — tap a transition to change it</h2>
+          <p className="mb-3 text-xs leading-5 text-neutral-500">{plan.explanation}</p>
+          <div className="flex items-center gap-1 overflow-x-auto pb-2">
+            {plan.segments.map((seg, i) => {
+              const clip = clips.find((c) => c.id === seg.clipId);
+              return (
+                <div key={seg.id} className="flex shrink-0 items-center gap-1">
+                  <div className="relative">
+                    {clip?.thumbnail ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={clip.thumbnail} alt="" className="h-16 w-12 rounded-lg object-cover" />
+                    ) : (
+                      <div className="stripes h-16 w-12 rounded-lg" />
+                    )}
+                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-0.5 font-mono text-[9px]">
+                      {(seg.end - seg.start).toFixed(1)}s
+                    </span>
+                  </div>
+                  {seg.transitionAfter !== null && (
+                    <button
+                      onClick={() => setPickerFor(i)}
+                      className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card text-base active:border-accent"
+                      aria-label="Change transition"
+                    >
+                      {transitionByType(seg.transitionAfter).emoji}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Color grade */}
+          <div className="mt-3">
+            <label className="text-xs font-semibold text-neutral-500">Color grade</label>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {Object.entries(COLOR_GRADES).map(([key, g]) => (
+                <button
+                  key={key}
+                  onClick={() => setPlan({ ...plan, colorGrade: key })}
+                  className={`rounded-full px-3 py-1 text-xs ${
+                    plan.colorGrade === key
+                      ? "bg-accent font-semibold text-white"
+                      : "border border-card-border text-neutral-400"
+                  }`}
+                >
+                  {g.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={handleRender}
+            disabled={!!busy}
+            className="btn-primary mt-5 w-full py-4 text-lg"
+          >
+            Render my edit →
+          </button>
+        </section>
+      )}
+
+      {busy && (
+        <div className="mt-5">
+          <div className="pulse-soft rounded-xl bg-accent/10 px-4 py-3 text-center text-sm font-medium text-accent">
+            {busy}
+          </div>
+          {renderPct > 0 && (
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-800">
+              <div className="h-full bg-accent transition-all" style={{ width: `${renderPct}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+      {error && (
+        <div className="mt-5 rounded-xl bg-red-500/10 px-4 py-3 text-center text-sm text-red-400">{error}</div>
+      )}
+
+      {/* Transition picker sheet */}
+      {pickerFor !== null && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/70" onClick={() => setPickerFor(null)}>
+          <div
+            className="slide-up mx-auto w-full max-w-md rounded-t-3xl border-t border-card-border bg-card p-5 pb-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-4 text-center text-sm font-bold">Pick a transition</h3>
+            <div className="grid grid-cols-3 gap-2">
+              {TRANSITIONS.map((t) => (
+                <button
+                  key={t.type}
+                  onClick={() => setTransition(pickerFor, t.type)}
+                  className="flex flex-col items-center gap-1 rounded-xl border border-card-border px-2 py-3 active:border-accent"
+                >
+                  <span className="text-2xl">{t.emoji}</span>
+                  <span className="text-[11px] font-medium">{t.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clips.length > 0 && !plan && !busy && (
+        <button
+          onClick={() => clips.forEach((c) => handleRemoveClip(c.id))}
+          className="mt-6 flex items-center justify-center gap-1 text-xs text-neutral-600"
+        >
+          <Trash2 size={12} /> Clear all clips
+        </button>
+      )}
+    </main>
+  );
+}
