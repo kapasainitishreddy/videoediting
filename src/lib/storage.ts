@@ -6,7 +6,7 @@ import { openDB, type IDBPDatabase } from "idb";
 import type { EditBlueprint, UserClip, EditPlan } from "./types";
 
 const DB_NAME = "viraledit";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 interface StoredVideo {
   id: string;
@@ -26,6 +26,7 @@ function getDB() {
         if (!db.objectStoreNames.contains("clips")) db.createObjectStore("clips", { keyPath: "id" });
         if (!db.objectStoreNames.contains("plans")) db.createObjectStore("plans", { keyPath: "id" });
         if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings");
+        if (!db.objectStoreNames.contains("fingerprints")) db.createObjectStore("fingerprints", { keyPath: "id" });
       },
     });
   }
@@ -101,4 +102,18 @@ export async function saveSetting(key: string, value: string) {
 export async function getSetting(key: string): Promise<string | undefined> {
   const db = await getDB();
   return db.get("settings", key);
+}
+
+// --- trend fingerprints (taste profile) ---
+import type { Fingerprint } from "./intelligence";
+
+export async function saveFingerprint(fp: Fingerprint) {
+  const db = await getDB();
+  await db.put("fingerprints", fp);
+}
+
+export async function listFingerprints(): Promise<Fingerprint[]> {
+  const db = await getDB();
+  const all: Fingerprint[] = await db.getAll("fingerprints");
+  return all.sort((a, b) => b.createdAt - a.createdAt);
 }

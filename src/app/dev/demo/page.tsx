@@ -8,6 +8,11 @@
 import { useEffect, useRef, useState } from "react";
 import { renderEdit, type BurnCaption } from "@/lib/ffmpeg-client";
 import { renderCuePng } from "@/lib/captions";
+import { kineticWordCues, renderTitleCard } from "@/lib/titles";
+import { cinematicify } from "@/lib/cinematic";
+import { generateOverlayClip } from "@/lib/overlays";
+import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import { transitionByType } from "@/lib/transitions";
 import type { TimelineSegment } from "@/lib/types";
 import { v4 as uuid } from "uuid";
 
@@ -266,24 +271,45 @@ export default function DemoPage() {
         speed: 1,
       });
     }
-    setStatus("styling captions…");
-    const cues = [
-      { text: "SIX SCENES", start: 0, end: 3 },
-      { text: "ONE TAP", start: 3, end: 6 },
-      { text: "AI EDITED 🔥", start: 6, end: 20 },
-    ];
-    const captions: BurnCaption[] = [];
-    for (const c of cues) captions.push({ png: await renderCuePng(c.text, "bold"), start: c.start, end: c.end });
+    // estimated output duration for audio + caption timing
+    let outDur = 0;
+    for (const sg of segments) outDur += (sg.end - sg.start) / sg.speed;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const r = transitionByType(segments[i].transitionAfter ?? "hard-cut");
+      if (r.xfade && r.defaultDuration > 0) outDur -= r.defaultDuration;
+    }
 
-    setStatus("rendering with real transitions + captions…");
-    const out = await renderEdit(
-      clips,
-      segments,
-      "cinematic",
-      (pct, msg) => setStatus(`${msg} (${pct}%)`),
-      undefined,
-      captions
-    );
+    setStatus("styling captions + title…");
+    const captions: BurnCaption[] = [];
+    captions.push({ png: await renderTitleCard({ title: "VIRALEDIT", subtitle: "cinematic engine demo", style: "epic" }), start: 0, end: 2 });
+    captions.push(...(await kineticWordCues("SIX SCENES ONE TAP", 2.2, 5.4)));
+    captions.push({ png: await renderCuePng("AI EDITED 🔥", "highlight"), start: 5.6, end: outDur });
+
+    setStatus("composing score + sfx…");
+    const score = await composeScore({ bpm: 110, seconds: outDur + 0.5, mood: "epic" });
+    const sfxAt: { time: number; type: SfxType }[] = [];
+    let clock = 0;
+    for (const sg of segments) {
+      clock += (sg.end - sg.start) / sg.speed;
+      const r = transitionByType(sg.transitionAfter ?? "hard-cut");
+      if (sg.transitionAfter && r.xfade) clock -= r.defaultDuration;
+      const sfx = sg.transitionAfter ? SFX_FOR_TRANSITION[sg.transitionAfter] : undefined;
+      if (sfx && clock < outDur) sfxAt.push({ time: Number(clock.toFixed(2)), type: sfx });
+    }
+    const audio = await mixTimeline({ seconds: outDur + 0.5, music: score, sfxAt });
+
+    setStatus("generating embers…");
+    const embers = await generateOverlayClip("embers", outDur + 1);
+
+    setStatus("rendering the full cinematic stack…");
+    const look = cinematicify();
+    const out = await renderEdit(clips, segments, {
+      look,
+      overlay: { blob: embers, opacity: 0.55 },
+      music: audio,
+      captions,
+      onProgress: (pct, msg) => setStatus(`${msg} (${pct}%)`),
+    });
     const u = URL.createObjectURL(out);
     setUrl(u);
     setStatus("done");

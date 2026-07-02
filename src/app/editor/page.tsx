@@ -2,13 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Captions, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Captions, Mic, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan } from "@/lib/storage";
-import { probeDuration, makeThumbnail, renderEdit, type BurnCaption } from "@/lib/ffmpeg-client";
+import { probeDuration, makeThumbnail, renderEdit, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
 import { smartAutoEdit } from "@/lib/auto-edit";
 import { detectBeats, type BeatResult } from "@/lib/beats";
 import { CAPTION_STYLES, type CaptionStyleId, layoutCaptions, renderCuePng } from "@/lib/captions";
+import { kineticWordCues, renderTitleCard, renderCreditsPages } from "@/lib/titles";
+import { measureColor, normalizeFilter } from "@/lib/cinematic";
+import { analyzeClip, type ClipAnalysis } from "@/lib/clip-analysis";
+import { isStaticShot, motionCentroidX, reframeFilter } from "@/lib/motion";
+import { generateOverlayClip } from "@/lib/overlays";
+import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import StudioPanel from "@/components/StudioPanel";
+import InsightsPanel from "@/components/InsightsPanel";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { TransitionType, UserClip } from "@/lib/types";
@@ -26,7 +34,7 @@ export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const musicRef = useRef<HTMLInputElement>(null);
-  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, setRenderedUrl } = useProject();
+  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio } = useProject();
 
   const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
   const [beats, setBeats] = useState<BeatResult | null>(null);
@@ -37,6 +45,25 @@ export default function EditorPage() {
   const [renderPct, setRenderPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
+  const [listening, setListening] = useState(false);
+
+  // #8 uniqueness: voice-directed editing via the Web Speech API
+  function handleVoiceDirection() {
+    type SR = { new (): { lang: string; onresult: (e: { results: { [i: number]: { [j: number]: { transcript: string } } } }) => void; onend: () => void; onerror: () => void; start: () => void } };
+    const w = window as unknown as { SpeechRecognition?: SR; webkitSpeechRecognition?: SR };
+    const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!Ctor) {
+      setError("Voice input isn't supported in this browser — type your direction instead.");
+      return;
+    }
+    const rec = new Ctor();
+    rec.lang = "en-US";
+    setListening(true);
+    rec.onresult = (e) => setDirection(e.results[0][0].transcript);
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    rec.start();
+  }
 
   // Restore clips saved in IndexedDB on reload
   useEffect(() => {
@@ -162,31 +189,123 @@ export default function EditorPage() {
           blobs.set(seg.clipId, v.blob);
         }
       }
-      // Build burned-in captions from the typed lines, timed across the
-      // final edit (snapped to beats when we have them).
-      let burnCaptions: BurnCaption[] | undefined;
+      const outDur = estimateOutputDuration(plan.segments);
+
+      // Captions: typed lines → full-line cues or kinetic word-pops.
+      const burnCaptions: BurnCaption[] = [];
       const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
       if (lines.length > 0) {
         setBusy("Styling captions…");
-        const outDur = estimateOutputDuration(plan.segments);
         const cues = layoutCaptions(lines, outDur, beats?.beatTimes);
-        burnCaptions = [];
         for (const cue of cues) {
-          burnCaptions.push({ png: await renderCuePng(cue.text, captionStyle), start: cue.start, end: cue.end });
+          if (studio.kineticCaptions) {
+            burnCaptions.push(...(await kineticWordCues(cue.text, cue.start, cue.end)));
+          } else {
+            burnCaptions.push({ png: await renderCuePng(cue.text, captionStyle), start: cue.start, end: cue.end });
+          }
         }
       }
 
-      const out = await renderEdit(
-        blobs,
-        plan.segments,
-        plan.colorGrade,
-        (pct, msg) => {
+      // Title card over the first ~2.2s, credits over the tail.
+      if (studio.titleCard?.title) {
+        setBusy("Rendering title card…");
+        burnCaptions.push({
+          png: await renderTitleCard(studio.titleCard),
+          start: 0,
+          end: Math.min(2.2, outDur),
+        });
+      }
+      const creditLines = studio.credits.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (creditLines.length > 0) {
+        setBusy("Rolling credits…");
+        const pages = await renderCreditsPages(creditLines);
+        let t = Math.max(0, outDur - pages.length * 2.2);
+        for (const p of pages) {
+          burnCaptions.push({ png: p.png, start: Number(t.toFixed(2)), end: Number(Math.min(outDur, t + p.duration).toFixed(2)) });
+          t += p.duration;
+        }
+      }
+
+      // Per-clip auto color/exposure normalize (#5/#46)
+      const normalizeByClip = new Map<string, string>();
+      if (studio.look.autoNormalize) {
+        setBusy("Matching color across clips…");
+        const stats = new Map<string, Awaited<ReturnType<typeof measureColor>>>();
+        for (const [id, blob] of blobs) stats.set(id, await measureColor(blob));
+        const target = [...stats.values()].reduce((s, x) => s + x.luma, 0) / Math.max(1, stats.size);
+        for (const [id, st] of stats) {
+          const f = normalizeFilter(st, target);
+          if (f) normalizeByClip.set(id, f);
+        }
+      }
+
+      // Subject-aware reframe (#11)
+      const reframeByClip = new Map<string, string>();
+      if (studio.autoReframe) {
+        setBusy("Finding your subject…");
+        for (const [id, blob] of blobs) {
+          reframeByClip.set(id, reframeFilter(await motionCentroidX(blob)));
+        }
+      }
+
+      // Auto Ken Burns on static shots (#6)
+      const motionBySegment = new Map<string, import("@/lib/motion").MotionEffect>();
+      if (studio.autoKenBurns) {
+        setBusy("Adding virtual camera moves…");
+        const analyses = new Map<string, ClipAnalysis>();
+        for (const [id, blob] of blobs) analyses.set(id, await analyzeClip(blob, { samplesPerSecond: 5, maxSamples: 60 }));
+        plan.segments.forEach((seg, i) => {
+          const a = analyses.get(seg.clipId);
+          if (a && isStaticShot(a, seg.start, seg.end)) {
+            motionBySegment.set(seg.id, i % 2 === 0 ? "ken-burns-in" : "ken-burns-out");
+          }
+        });
+      }
+
+      // Atmosphere overlay clip (#17/#19/#39)
+      let overlay: RenderOptions["overlay"];
+      if (studio.overlay) {
+        setBusy(`Generating ${studio.overlay} layer…`);
+        overlay = { blob: await generateOverlayClip(studio.overlay, outDur + 1), opacity: studio.overlayOpacity };
+      }
+
+      // Audio: uploaded music, or composed score; plus auto SFX; mixed once.
+      let finalAudio: Blob | undefined = music?.blob;
+      const sfxAt: { time: number; type: SfxType }[] = [];
+      if (studio.autoSfx) {
+        let clock = 0;
+        for (const seg of plan.segments) {
+          clock += (seg.end - seg.start) / seg.speed;
+          const recipe = transitionByType(seg.transitionAfter ?? "hard-cut");
+          if (seg.transitionAfter && recipe.xfade) clock -= recipe.defaultDuration;
+          const sfx = seg.transitionAfter ? SFX_FOR_TRANSITION[seg.transitionAfter] : undefined;
+          if (sfx && clock < outDur) sfxAt.push({ time: Number(clock.toFixed(2)), type: sfx });
+        }
+      }
+      if (!finalAudio && studio.scoreMood) {
+        setBusy("Composing your score…");
+        finalAudio = await composeScore({ bpm: beats?.bpm ?? blueprint?.beats?.bpm ?? 100, seconds: outDur + 0.5, mood: studio.scoreMood });
+      }
+      if (finalAudio || sfxAt.length > 0) {
+        setBusy("Mixing audio…");
+        finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt });
+      }
+
+      const out = await renderEdit(blobs, plan.segments, {
+        colorGrade: plan.colorGrade,
+        look: { ...studio.look, grade: studio.look.grade === "none" ? plan.colorGrade : studio.look.grade },
+        motionDefault: studio.motionDefault,
+        motionBySegment,
+        normalizeByClip,
+        reframeByClip,
+        music: finalAudio,
+        captions: burnCaptions.length ? burnCaptions : undefined,
+        overlay,
+        onProgress: (pct, msg) => {
           setRenderPct(pct);
           setBusy(msg);
         },
-        music?.blob,
-        burnCaptions
-      );
+      });
       const url = URL.createObjectURL(out);
       setRenderedUrl(url);
       router.push("/export");
@@ -253,8 +372,15 @@ export default function EditorPage() {
 
       {/* AI direction */}
       <section className="card mt-5 p-4">
-        <div className="flex items-center gap-2 text-sm font-bold">
-          <Sparkles size={15} className="text-accent" /> Direct the AI
+        <div className="flex items-center justify-between text-sm font-bold">
+          <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
+          <button
+            onClick={handleVoiceDirection}
+            aria-label="Speak your direction"
+            className={`rounded-full p-2 ${listening ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
+          >
+            <Mic size={14} className={listening ? "pulse-soft" : ""} />
+          </button>
         </div>
         <textarea
           value={direction}
@@ -283,10 +409,17 @@ export default function EditorPage() {
         </button>
       </section>
 
+      <StudioPanel />
+
       {/* Timeline */}
       {plan && (
         <section className="mt-5">
-          <h2 className="mb-2 text-sm font-bold">Timeline — tap a transition to change it</h2>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-bold">Timeline — tap a transition to change it</h2>
+            {planHistory.length > 0 && (
+              <button onClick={undoPlan} className="text-xs text-neutral-500 underline">undo</button>
+            )}
+          </div>
           <p className="mb-3 text-xs leading-5 text-neutral-500">{plan.explanation}</p>
           <div className="flex items-center gap-1 overflow-x-auto pb-2">
             {plan.segments.map((seg, i) => {
@@ -408,6 +541,7 @@ export default function EditorPage() {
           >
             Render my edit →
           </button>
+          <InsightsPanel />
         </section>
       )}
 

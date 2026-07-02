@@ -2,8 +2,9 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, Music, Palette, Scissors, ListChecks, RotateCcw } from "lucide-react";
-import { getVideo, getBlueprint, saveBlueprint } from "@/lib/storage";
+import { ArrowRight, Music, Palette, Scissors, ListChecks, RotateCcw, Activity, Camera, Heart, Send } from "lucide-react";
+import { getVideo, getBlueprint, saveBlueprint, saveFingerprint } from "@/lib/storage";
+import { paceAnalysis, shotList, fingerprintOf, migrateFormat } from "@/lib/intelligence";
 import { detectCutsHeuristic } from "@/lib/ffmpeg-client";
 import { probeDuration } from "@/lib/ffmpeg-client";
 import { assembleBlueprint } from "@/lib/analyzer";
@@ -18,6 +19,7 @@ function AnalyzeInner() {
   const [progress, setProgress] = useState({ pct: 0, msg: "Starting…" });
   const [bp, setBp] = useState<EditBlueprint | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tasteSaved, setTasteSaved] = useState(false);
   const started = useRef(false);
 
   const videoId = params.get("video");
@@ -207,6 +209,75 @@ function AnalyzeInner() {
             </li>
           ))}
         </ol>
+      </section>
+
+      {/* Pacing structure (#26) */}
+      <section className="mt-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
+          <Activity size={15} className="text-accent" /> Pacing structure
+        </h2>
+        <div className="flex flex-col gap-2">
+          {paceAnalysis(bp).acts.map((a) => (
+            <div key={a.act} className="card px-4 py-3">
+              <div className="flex justify-between text-sm font-semibold capitalize">
+                {a.act}
+                <span className="font-mono text-xs text-accent">{a.cutsPerSecond} cuts/s</span>
+              </div>
+              <p className="mt-1 text-xs text-neutral-400">{a.verdict}</p>
+            </div>
+          ))}
+          <p className="text-xs text-neutral-500">{paceAnalysis(bp).overall}</p>
+        </div>
+      </section>
+
+      {/* Shot list (#9 uniqueness) */}
+      <section className="mt-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold">
+          <Camera size={15} className="text-accent" /> Shot list — film these
+        </h2>
+        <ol className="flex flex-col gap-1.5">
+          {shotList(bp).map((s) => (
+            <li key={s.n} className="card px-4 py-2.5 text-xs leading-5 text-neutral-300">
+              <span className="mr-2 font-bold text-accent">{s.n}.</span>
+              {s.text}
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* Taste profile + format migration */}
+      <section className="mt-4 flex flex-col gap-2">
+        <button
+          onClick={async () => {
+            await saveFingerprint(fingerprintOf(bp));
+            setTasteSaved(true);
+          }}
+          className="card flex items-center justify-center gap-2 py-3 text-xs font-semibold text-neutral-300 active:border-accent"
+        >
+          <Heart size={13} className={tasteSaved ? "text-accent" : ""} />
+          {tasteSaved ? "Saved to your taste profile" : "Save style to my taste profile"}
+        </button>
+        <div className="card p-3">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-neutral-400">
+            <Send size={12} /> Adapt this style for another platform
+          </p>
+          <div className="flex gap-1.5">
+            {(["tiktok", "reels", "shorts"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={async () => {
+                  const migrated = migrateFormat(bp, p);
+                  await saveBlueprint(migrated);
+                  router.push(`/analyze?blueprint=${migrated.id}`);
+                  window.location.href = `/analyze?blueprint=${migrated.id}`;
+                }}
+                className="flex-1 rounded-full border border-card-border py-2 text-xs capitalize text-neutral-300 active:border-accent"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       <div className="sticky bottom-4 mt-8">

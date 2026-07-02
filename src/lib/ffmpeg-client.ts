@@ -12,6 +12,8 @@ import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import type { TimelineSegment } from "./types";
 import { transitionByType, COLOR_GRADES } from "./transitions";
+import { buildLookFilter, DEFAULT_LOOK, type LookConfig } from "./cinematic";
+import { motionFilter, type MotionEffect } from "./motion";
 
 // FFmpeg WASM may return views over SharedArrayBuffer; copy into a plain
 // ArrayBuffer so Blob accepts it.
@@ -191,16 +193,39 @@ export interface BurnCaption {
   end: number;
 }
 
+export interface RenderOptions {
+  colorGrade?: string; // legacy simple grade key
+  look?: LookConfig; // full cinematic look (wins over colorGrade extras)
+  motionDefault?: MotionEffect; // applied to every segment
+  motionBySegment?: Map<string, MotionEffect>; // per-segment override
+  normalizeByClip?: Map<string, string>; // per-clip WB/exposure filter
+  reframeByClip?: Map<string, string>; // per-clip subject-crop filter
+  music?: Blob;
+  captions?: BurnCaption[]; // captions, titles, lower thirds, credits, kinetic
+  overlay?: { blob: Blob; opacity: number }; // atmosphere layer (blend=screen)
+  onProgress?: (pct: number, msg: string) => void;
+}
+
 export async function renderEdit(
   clips: Map<string, Blob>,
   segments: TimelineSegment[],
-  colorGrade: string,
-  onProgress?: (pct: number, msg: string) => void,
-  music?: Blob,
-  captions?: BurnCaption[]
+  optsOrGrade: RenderOptions | string,
+  onProgressLegacy?: (pct: number, msg: string) => void,
+  musicLegacy?: Blob,
+  captionsLegacy?: BurnCaption[]
 ): Promise<Blob> {
+  const opts: RenderOptions =
+    typeof optsOrGrade === "string"
+      ? { colorGrade: optsOrGrade, onProgress: onProgressLegacy, music: musicLegacy, captions: captionsLegacy }
+      : optsOrGrade;
+  const onProgress = opts.onProgress;
+  const music = opts.music;
+  const captions = opts.captions;
+  const look = opts.look ?? { ...DEFAULT_LOOK, grade: opts.colorGrade ?? "none" };
+
   const ff = await getFFmpeg();
-  const gradeFilter = COLOR_GRADES[colorGrade]?.filter ?? "";
+  const gradeFilter = COLOR_GRADES[look.grade]?.filter ?? COLOR_GRADES[opts.colorGrade ?? ""]?.filter ?? "";
+  const lookFilter = buildLookFilter(look, gradeFilter);
 
   // 1. Write + normalize every segment to 720x1280 (9:16) so xfade works
   const segFiles: { file: string; duration: number }[] = [];
@@ -211,26 +236,35 @@ export async function renderEdit(
     onProgress?.(Math.round((i / segments.length) * 50), `Preparing clip ${i + 1}/${segments.length}`);
 
     await ff.writeFile(`src_${i}.mp4`, await fetchFile(blob));
-    const speedFilter = seg.speed !== 1 ? `setpts=${(1 / seg.speed).toFixed(4)}*PTS,` : "";
+    const speedFilter = seg.speed !== 1 ? `setpts=${(1 / seg.speed).toFixed(4)}*PTS` : "";
+    const segDur = (seg.end - seg.start) / seg.speed;
+    const effect = opts.motionBySegment?.get(seg.id) ?? opts.motionDefault ?? "none";
+    const m = motionFilter(effect, segDur);
+    const reframe = opts.reframeByClip?.get(seg.clipId) ?? "";
+    const normalize = opts.normalizeByClip?.get(seg.clipId) ?? "";
+    const scaling = m.needsOverscan
+      ? [m.pre, m.post]
+      : [m.pre, "scale=720:1280:force_original_aspect_ratio=increase", "crop=720:1280"];
     const vf = [
       `trim=start=${seg.start}:end=${seg.end}`,
       "setpts=PTS-STARTPTS",
-      speedFilter.replace(/,$/, ""),
-      "scale=720:1280:force_original_aspect_ratio=increase",
-      "crop=720:1280",
+      speedFilter,
+      reframe,
+      ...scaling,
       "fps=30",
-      gradeFilter,
+      normalize,
+      lookFilter,
       "format=yuv420p",
     ].filter(Boolean).join(",");
 
-    await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", `seg_${i}.mp4`]);
+    await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`]);
     await ff.deleteFile(`src_${i}.mp4`);
     const outDur = (seg.end - seg.start) / seg.speed;
     segFiles.push({ file: `seg_${i}.mp4`, duration: outDur });
   }
 
   if (segFiles.length === 1) {
-    return finalize(ff, segFiles[0].file, music, captions, onProgress);
+    return finalize(ff, segFiles[0].file, music, captions, opts.overlay, onProgress);
   }
 
   // 2. Chain xfades left-to-right
@@ -262,23 +296,48 @@ export async function renderEdit(
   }
 
   for (const s of segFiles) await ff.deleteFile(s.file).catch(() => {});
-  return finalize(ff, current, music, captions, onProgress);
+  return finalize(ff, current, music, captions, opts.overlay, onProgress);
 }
 
-// Burn time-gated caption PNGs, lay music under the cut, then read it out.
+// Composite atmosphere overlay, burn caption PNGs, lay music under the cut.
 async function finalize(
   ff: FFmpeg,
   videoFile: string,
   music: Blob | undefined,
   captions: BurnCaption[] | undefined,
+  atmosphere: { blob: Blob; opacity: number } | undefined,
   onProgress?: (pct: number, msg: string) => void
 ): Promise<Blob> {
   let out = videoFile;
 
-  // Burn captions first (over the muted video), before music is muxed in.
+  // Atmosphere layer first (under the text): blend=screen — black stays
+  // transparent, particles/flares/leaks read as light.
+  if (atmosphere) {
+    onProgress?.(92, "Compositing atmosphere…");
+    await ff.writeFile("atmo_in", await fetchFile(atmosphere.blob));
+    const op = Math.max(0.05, Math.min(1, atmosphere.opacity));
+    // No -stream_loop: looping MediaRecorder webm aborts the WASM instance.
+    // Callers generate the overlay at least as long as the video; framesync's
+    // repeatlast holds the final overlay frame if it runs short.
+    const code = await ff.exec([
+      "-i", out,
+      "-i", "atmo_in",
+      "-filter_complex",
+      // blend must run on RGB planes: screen-mode math on YUV chroma shifts colors
+      `[0:v]format=gbrp[base];[1:v]scale=720:1280,fps=30,format=gbrp[ov];[base][ov]blend=all_mode=screen:all_opacity=${op.toFixed(2)}:shortest=1,format=yuv420p[v]`,
+      "-map", "[v]", "-preset", "ultrafast", "-y", "atmo_out.mp4",
+    ]);
+    await ff.deleteFile("atmo_in").catch(() => {});
+    if (code === 0) {
+      if (out !== videoFile) await ff.deleteFile(out).catch(() => {});
+      out = "atmo_out.mp4";
+    }
+  }
+
+  // Burn captions (over the atmosphere), before music is muxed in.
   if (captions && captions.length > 0) {
     onProgress?.(94, "Burning captions…");
-    const inputs: string[] = ["-i", videoFile];
+    const inputs: string[] = ["-i", out];
     for (let i = 0; i < captions.length; i++) {
       await ff.writeFile(`cap_${i}.png`, await fetchFile(captions[i].png));
       inputs.push("-i", `cap_${i}.png`);
