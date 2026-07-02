@@ -42,3 +42,4 @@ next-env.d.ts
 public/ffmpeg/
 e2e-output.mp4
 transition-demo.mp4
+showcase.mp4

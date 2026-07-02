@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Captions, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan } from "@/lib/storage";
-import { probeDuration, makeThumbnail, renderEdit } from "@/lib/ffmpeg-client";
-import { autoEdit } from "@/lib/auto-edit";
+import { probeDuration, makeThumbnail, renderEdit, type BurnCaption } from "@/lib/ffmpeg-client";
+import { smartAutoEdit } from "@/lib/auto-edit";
+import { detectBeats, type BeatResult } from "@/lib/beats";
+import { CAPTION_STYLES, type CaptionStyleId, layoutCaptions, renderCuePng } from "@/lib/captions";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { TransitionType, UserClip } from "@/lib/types";
@@ -27,6 +29,9 @@ export default function EditorPage() {
   const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, setRenderedUrl } = useProject();
 
   const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
+  const [beats, setBeats] = useState<BeatResult | null>(null);
+  const [captionText, setCaptionText] = useState("");
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyleId>("bold");
   const [direction, setDirection] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [renderPct, setRenderPct] = useState(0);
@@ -67,12 +72,39 @@ export default function EditorPage() {
   async function handleAutoEdit() {
     setError(null);
     try {
-      setBusy("Building your edit…");
-      const p = autoEdit(blueprint, clips, direction);
+      // Pull every clip's actual bytes so we can analyze motion + highlights
+      setBusy("Loading clips…");
+      const clipBlobs = new Map<string, Blob>();
+      for (const c of clips) {
+        const v = await getVideo(c.id);
+        if (v) clipBlobs.set(c.id, v.blob);
+      }
+
+      // Detect real beats from the attached music (once)
+      let beats: BeatResult | null = null;
+      if (music) {
+        setBusy("Listening to your music for the beat…");
+        try {
+          beats = await detectBeats(music.blob);
+          setBeats(beats);
+        } catch {
+          beats = null; // fall back to reference/estimated rhythm
+        }
+      }
+
+      const p = await smartAutoEdit({
+        blueprint,
+        clips,
+        clipBlobs,
+        direction,
+        beats,
+        onProgress: (msg) => setBusy(msg),
+      });
 
       // Optional AI refinement — works identically no matter which key
       // (MiniMax/Anthropic/OpenAI) is configured in .env.local, since the
       // API route normalizes every provider's reply to the same schema.
+      setBusy("Refining…");
       try {
         const res = await fetch("/api/ai", {
           method: "POST",
@@ -98,6 +130,17 @@ export default function EditorPage() {
     }
   }
 
+  // Mirror renderEdit's duration math so captions line up with the output.
+  function estimateOutputDuration(segments: typeof plan extends null ? never : NonNullable<typeof plan>["segments"]): number {
+    let total = 0;
+    for (const s of segments) total += (s.end - s.start) / s.speed;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const r = transitionByType(segments[i].transitionAfter ?? "hard-cut");
+      if (r.xfade && r.defaultDuration > 0) total -= r.defaultDuration;
+    }
+    return Math.max(0.5, total);
+  }
+
   function setTransition(segIndex: number, t: TransitionType) {
     if (!plan) return;
     const segments = plan.segments.map((s, i) => (i === segIndex ? { ...s, transitionAfter: t } : s));
@@ -119,6 +162,20 @@ export default function EditorPage() {
           blobs.set(seg.clipId, v.blob);
         }
       }
+      // Build burned-in captions from the typed lines, timed across the
+      // final edit (snapped to beats when we have them).
+      let burnCaptions: BurnCaption[] | undefined;
+      const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (lines.length > 0) {
+        setBusy("Styling captions…");
+        const outDur = estimateOutputDuration(plan.segments);
+        const cues = layoutCaptions(lines, outDur, beats?.beatTimes);
+        burnCaptions = [];
+        for (const cue of cues) {
+          burnCaptions.push({ png: await renderCuePng(cue.text, captionStyle), start: cue.start, end: cue.end });
+        }
+      }
+
       const out = await renderEdit(
         blobs,
         plan.segments,
@@ -127,7 +184,8 @@ export default function EditorPage() {
           setRenderPct(pct);
           setBusy(msg);
         },
-        music?.blob
+        music?.blob,
+        burnCaptions
       );
       const url = URL.createObjectURL(out);
       setRenderedUrl(url);
@@ -289,6 +347,38 @@ export default function EditorPage() {
                 if (f) setMusic({ name: f.name, blob: f });
               }}
             />
+          </div>
+
+          {/* Captions */}
+          <div className="mt-3">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-neutral-500">
+              <Captions size={13} /> Captions <span className="text-neutral-600">— one line per caption</span>
+            </label>
+            <textarea
+              value={captionText}
+              onChange={(e) => setCaptionText(e.target.value)}
+              rows={2}
+              placeholder={"POV: you finally tried it\nwait for it…\nno way 🤯"}
+              className="mt-1.5 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
+            />
+            {captionText.trim() && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {Object.values(CAPTION_STYLES).map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setCaptionStyle(s.id)}
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      captionStyle === s.id ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 text-[10px] text-neutral-600">
+              {beats ? "Timed to your music's beats." : "Spread evenly across the edit. Add music to time them to the beat."}
+            </p>
           </div>
 
           {/* Color grade */}

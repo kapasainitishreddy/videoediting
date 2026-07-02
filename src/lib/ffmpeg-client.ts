@@ -185,12 +185,19 @@ export async function detectCutsHeuristic(
 
 // Render the final edit: trim each segment, apply speed + color grade,
 // then chain xfade transitions between consecutive segments.
+export interface BurnCaption {
+  png: Blob;
+  start: number;
+  end: number;
+}
+
 export async function renderEdit(
   clips: Map<string, Blob>,
   segments: TimelineSegment[],
   colorGrade: string,
   onProgress?: (pct: number, msg: string) => void,
-  music?: Blob
+  music?: Blob,
+  captions?: BurnCaption[]
 ): Promise<Blob> {
   const ff = await getFFmpeg();
   const gradeFilter = COLOR_GRADES[colorGrade]?.filter ?? "";
@@ -223,7 +230,7 @@ export async function renderEdit(
   }
 
   if (segFiles.length === 1) {
-    return finalize(ff, segFiles[0].file, music, onProgress);
+    return finalize(ff, segFiles[0].file, music, captions, onProgress);
   }
 
   // 2. Chain xfades left-to-right
@@ -255,27 +262,61 @@ export async function renderEdit(
   }
 
   for (const s of segFiles) await ff.deleteFile(s.file).catch(() => {});
-  return finalize(ff, current, music, onProgress);
+  return finalize(ff, current, music, captions, onProgress);
 }
 
-// Optionally lay a music track under the finished cut, then read it out.
+// Burn time-gated caption PNGs, lay music under the cut, then read it out.
 async function finalize(
   ff: FFmpeg,
   videoFile: string,
   music: Blob | undefined,
+  captions: BurnCaption[] | undefined,
   onProgress?: (pct: number, msg: string) => void
 ): Promise<Blob> {
   let out = videoFile;
+
+  // Burn captions first (over the muted video), before music is muxed in.
+  if (captions && captions.length > 0) {
+    onProgress?.(94, "Burning captions…");
+    const inputs: string[] = ["-i", videoFile];
+    for (let i = 0; i < captions.length; i++) {
+      await ff.writeFile(`cap_${i}.png`, await fetchFile(captions[i].png));
+      inputs.push("-i", `cap_${i}.png`);
+    }
+    // chain: [0:v][1:v]overlay...enable[t1]; [t1][2:v]overlay...enable[t2]; …
+    let label = "0:v";
+    const steps: string[] = [];
+    captions.forEach((c, i) => {
+      const next = i === captions.length - 1 ? "vout" : `t${i}`;
+      steps.push(
+        `[${label}][${i + 1}:v]overlay=0:0:enable='between(t,${c.start.toFixed(2)},${c.end.toFixed(2)})'[${next}]`
+      );
+      label = next;
+    });
+    const capOut = "capped.mp4";
+    const code = await ff.exec([
+      ...inputs,
+      "-filter_complex", steps.join(";"),
+      "-map", "[vout]", "-preset", "ultrafast", "-y", capOut,
+    ]);
+    for (let i = 0; i < captions.length; i++) await ff.deleteFile(`cap_${i}.png`).catch(() => {});
+    if (code === 0) {
+      if (out !== videoFile) await ff.deleteFile(out).catch(() => {});
+      out = capOut;
+    }
+  }
+
   if (music) {
     onProgress?.(96, "Adding music…");
     await ff.writeFile("music_in", await fetchFile(music));
     const code = await ff.exec([
-      "-i", videoFile, "-i", "music_in",
+      "-i", out, "-i", "music_in",
       "-map", "0:v", "-map", "1:a",
       "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
       "-shortest", "with_music.mp4",
     ]);
     if (code === 0) {
+      if (out !== videoFile) await ff.deleteFile(out).catch(() => {});
       out = "with_music.mp4";
     }
     await ff.deleteFile("music_in").catch(() => {});

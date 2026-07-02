@@ -6,7 +6,8 @@
 // uses — so the transitions you see are the real product output, just on
 // synthetic footage (no real reel is reachable from this sandbox).
 import { useEffect, useRef, useState } from "react";
-import { renderEdit } from "@/lib/ffmpeg-client";
+import { renderEdit, type BurnCaption } from "@/lib/ffmpeg-client";
+import { renderCuePng } from "@/lib/captions";
 import type { TimelineSegment } from "@/lib/types";
 import { v4 as uuid } from "uuid";
 
@@ -265,9 +266,23 @@ export default function DemoPage() {
         speed: 1,
       });
     }
-    setStatus("rendering with real transitions…");
-    const out = await renderEdit(clips, segments, "cinematic", (pct, msg) =>
-      setStatus(`${msg} (${pct}%)`)
+    setStatus("styling captions…");
+    const cues = [
+      { text: "SIX SCENES", start: 0, end: 3 },
+      { text: "ONE TAP", start: 3, end: 6 },
+      { text: "AI EDITED 🔥", start: 6, end: 20 },
+    ];
+    const captions: BurnCaption[] = [];
+    for (const c of cues) captions.push({ png: await renderCuePng(c.text, "bold"), start: c.start, end: c.end });
+
+    setStatus("rendering with real transitions + captions…");
+    const out = await renderEdit(
+      clips,
+      segments,
+      "cinematic",
+      (pct, msg) => setStatus(`${msg} (${pct}%)`),
+      undefined,
+      captions
     );
     const u = URL.createObjectURL(out);
     setUrl(u);
