@@ -34,7 +34,10 @@ export async function composeScore(opts: {
   const barLen = beatLen * 4;
 
   const master = ctx.createGain();
-  master.gain.value = 0.8;
+  master.gain.setValueAtTime(0, 0);
+  master.gain.linearRampToValueAtTime(0.8, 0.6); // ease in
+  master.gain.setValueAtTime(0.8, Math.max(0.6, seconds - 1.0));
+  master.gain.linearRampToValueAtTime(0.0, seconds); // resolve out
   const lp = ctx.createBiquadFilter();
   lp.type = "lowpass";
   lp.frequency.value = 1200 + prog.bright * 2600;

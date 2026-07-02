@@ -1,218 +1,215 @@
 "use client";
 
-// Dev demo: draws six content-rich "scenes" (golden hour, ocean, city
-// night, forest whip, neon, sunrise) with real camera motion, captures
-// each as a clip, then runs them through the SAME renderEdit() the app
-// uses — so the transitions you see are the real product output, just on
-// synthetic footage (no real reel is reachable from this sandbox).
-import { useEffect, useRef, useState } from "react";
+// The demo, cut like an editor — not a feature reel.
+// One palette (dusk amber/navy), one transition language (cuts + fades,
+// a single light-leak at the emotional peak), one quiet title, a chill
+// score, and exactly two sound effects. Everything through the real
+// renderEdit() pipeline.
+import { useEffect, useState } from "react";
 import { renderEdit, type BurnCaption } from "@/lib/ffmpeg-client";
-import { renderCuePng } from "@/lib/captions";
-import { kineticWordCues, renderTitleCard } from "@/lib/titles";
-import { cinematicify } from "@/lib/cinematic";
-import { generateOverlayClip } from "@/lib/overlays";
-import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import { renderTitleCard } from "@/lib/titles";
+import { DEFAULT_LOOK } from "@/lib/cinematic";
+import { composeScore, mixTimeline, type SfxType } from "@/lib/audio-cinema";
 import { transitionByType } from "@/lib/transitions";
 import type { TimelineSegment } from "@/lib/types";
 import { v4 as uuid } from "uuid";
 
 type Draw = (ctx: CanvasRenderingContext2D, t: number, W: number, H: number) => void;
 
-// Each scene draws a full frame at local time t (0..1 within the clip),
-// with deliberate camera motion so pans/zooms are legible in transitions.
+// One cohesive dusk palette across every scene so the grade reads as a
+// single film, not six unrelated clips.
+const DUSK = {
+  skyTop: "#1c2440",
+  skyMid: "#4a3a5e",
+  amber: "#e8955c",
+  amberDeep: "#c96f45",
+  silhouette: "#12141f",
+  silhouette2: "#1a1d2c",
+  star: "rgba(240,238,255,0.9)",
+};
+
 const SCENES: { name: string; draw: Draw }[] = [
   {
-    name: "GOLDEN HOUR",
+    // wide dune, low sun — slow pan right
+    name: "dune",
     draw: (c, t, W, H) => {
       const g = c.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#ff9a3c");
-      g.addColorStop(0.5, "#ff6f61");
-      g.addColorStop(1, "#4a2c5a");
+      g.addColorStop(0, DUSK.skyTop);
+      g.addColorStop(0.55, DUSK.skyMid);
+      g.addColorStop(0.8, DUSK.amberDeep);
       c.fillStyle = g;
       c.fillRect(0, 0, W, H);
-      // sun sinking + drifting right (camera pan)
-      const sx = W * 0.3 + t * W * 0.15;
-      const sy = H * 0.4 + t * H * 0.06;
-      const sun = c.createRadialGradient(sx, sy, 0, sx, sy, 160);
-      sun.addColorStop(0, "rgba(255,245,200,0.95)");
-      sun.addColorStop(1, "rgba(255,245,200,0)");
+      const sx = W * 0.62 - t * W * 0.06;
+      const sun = c.createRadialGradient(sx, H * 0.66, 0, sx, H * 0.66, 110);
+      sun.addColorStop(0, "rgba(255,214,150,0.95)");
+      sun.addColorStop(0.5, "rgba(232,149,92,0.35)");
+      sun.addColorStop(1, "rgba(232,149,92,0)");
       c.fillStyle = sun;
       c.fillRect(0, 0, W, H);
-      // parallax hills
-      c.fillStyle = "#3a1f47";
-      hill(c, W, H, 0.72, 60, t * 40);
-      c.fillStyle = "#2a1533";
-      hill(c, W, H, 0.82, 90, t * 80);
+      // dune curves
+      c.fillStyle = DUSK.silhouette2;
+      c.beginPath();
+      c.moveTo(0, H);
+      for (let x = 0; x <= W; x += 12) c.lineTo(x, H * 0.74 + Math.sin(x / 170 + 1.3) * 46 + t * 6);
+      c.lineTo(W, H);
+      c.fill();
+      c.fillStyle = DUSK.silhouette;
+      c.beginPath();
+      c.moveTo(0, H);
+      for (let x = 0; x <= W; x += 12) c.lineTo(x, H * 0.85 + Math.sin(x / 120 + 4) * 34);
+      c.lineTo(W, H);
+      c.fill();
     },
   },
   {
-    name: "OCEAN",
+    // calm ocean horizon, sun path on water — near-static, tiny drift
+    name: "ocean",
     draw: (c, t, W, H) => {
       const g = c.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#7ec7e8");
-      g.addColorStop(0.45, "#2a8fbd");
-      g.addColorStop(1, "#0a4d6e");
+      g.addColorStop(0, DUSK.skyMid);
+      g.addColorStop(0.5, DUSK.amberDeep);
+      g.addColorStop(0.52, "#2a2440");
+      g.addColorStop(1, "#141426");
       c.fillStyle = g;
       c.fillRect(0, 0, W, H);
-      // sun glint band + moving wave lines (zoom-in feel: scale up)
-      c.save();
-      c.translate(W / 2, H / 2);
-      c.scale(1 + t * 0.25, 1 + t * 0.25);
-      c.translate(-W / 2, -H / 2);
-      c.strokeStyle = "rgba(255,255,255,0.5)";
-      c.lineWidth = 4;
-      for (let i = 0; i < 10; i++) {
-        const y = H * 0.5 + i * 40 + Math.sin(t * 6 + i) * 8;
-        c.beginPath();
-        c.moveTo(0, y);
-        for (let x = 0; x <= W; x += 20) c.lineTo(x, y + Math.sin(x / 40 + t * 8 + i) * 6);
-        c.stroke();
+      // sun glow at horizon
+      const sun = c.createRadialGradient(W / 2, H * 0.51, 0, W / 2, H * 0.51, 180);
+      sun.addColorStop(0, "rgba(255,200,140,0.7)");
+      sun.addColorStop(1, "rgba(255,200,140,0)");
+      c.fillStyle = sun;
+      c.fillRect(0, 0, W, H);
+      // shimmering sun path
+      for (let y = H * 0.53; y < H * 0.95; y += 7) {
+        const w = 26 + (y - H * 0.53) * 0.35;
+        const jitter = Math.sin(y * 0.7 + t * 3) * 7;
+        c.fillStyle = `rgba(255,190,130,${0.24 - (y - H * 0.53) / (H * 1.6)})`;
+        c.fillRect(W / 2 - w / 2 + jitter, y, w, 2.5);
       }
-      c.restore();
     },
   },
   {
-    name: "CITY NIGHT",
+    // layered mountain silhouettes with mist — very slow push feel
+    name: "ridges",
     draw: (c, t, W, H) => {
-      c.fillStyle = "#0a0a1a";
+      const g = c.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, DUSK.skyTop);
+      g.addColorStop(0.7, DUSK.skyMid);
+      g.addColorStop(1, DUSK.amberDeep);
+      c.fillStyle = g;
       c.fillRect(0, 0, W, H);
-      // buildings
-      for (let i = 0; i < 8; i++) {
-        const bx = (i / 8) * W;
-        const bw = W / 8 - 6;
-        const bh = H * (0.35 + ((i * 37) % 40) / 100);
-        c.fillStyle = "#151530";
-        c.fillRect(bx, H - bh, bw, bh);
-        // windows blinking
-        for (let wy = 0; wy < bh; wy += 30) {
-          for (let wx = 6; wx < bw - 6; wx += 20) {
-            const on = (Math.sin(t * 10 + i * 3 + wy + wx) > 0.3) ? 1 : 0.1;
-            c.fillStyle = `rgba(255,210,120,${on})`;
-            c.fillRect(bx + wx, H - bh + wy + 6, 10, 14);
-          }
+      const layers = [
+        { base: 0.55, amp: 70, col: "rgba(38,36,64,0.9)", speed: 8 },
+        { base: 0.66, amp: 90, col: "rgba(28,27,48,0.95)", speed: 16 },
+        { base: 0.78, amp: 80, col: DUSK.silhouette2, speed: 26 },
+        { base: 0.9, amp: 60, col: DUSK.silhouette, speed: 40 },
+      ];
+      for (const l of layers) {
+        c.fillStyle = l.col;
+        c.beginPath();
+        c.moveTo(0, H);
+        for (let x = 0; x <= W; x += 10) {
+          c.lineTo(x, H * l.base + Math.sin((x + t * l.speed) / 130) * l.amp * 0.4 + Math.sin((x + t * l.speed) / 47) * l.amp * 0.12);
         }
-      }
-      // light streaks sweeping (whip motion)
-      c.strokeStyle = "rgba(120,200,255,0.7)";
-      c.lineWidth = 6;
-      for (let s = 0; s < 4; s++) {
-        const y = H * 0.75 + s * 30;
-        const x = ((t * 2 + s * 0.25) % 1) * W * 1.4 - W * 0.2;
-        c.beginPath();
-        c.moveTo(x, y);
-        c.lineTo(x + 120, y);
-        c.stroke();
+        c.lineTo(W, H);
+        c.fill();
+        // mist band above each ridge
+        const m = c.createLinearGradient(0, H * l.base - 60, 0, H * l.base + 10);
+        m.addColorStop(0, "rgba(120,110,140,0)");
+        m.addColorStop(1, "rgba(120,110,140,0.14)");
+        c.fillStyle = m;
+        c.fillRect(0, H * l.base - 60, W, 70);
       }
     },
   },
   {
-    name: "FOREST",
+    // night sky — stars slowly rotating, one meteor at ~60%
+    name: "stars",
     draw: (c, t, W, H) => {
       const g = c.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#a8d98a");
-      g.addColorStop(1, "#1e4d2b");
+      g.addColorStop(0, "#0b0f22");
+      g.addColorStop(0.8, DUSK.skyTop);
+      g.addColorStop(1, "#2a2440");
       c.fillStyle = g;
       c.fillRect(0, 0, W, H);
-      // trees rushing left (fast whip pan)
-      for (let i = 0; i < 14; i++) {
-        const base = (i / 14) * W * 2;
-        const x = ((base - t * W * 2.2) % (W * 2 + 200)) - 100;
-        const th = H * (0.45 + ((i * 53) % 30) / 100);
-        c.fillStyle = i % 2 ? "#2d5f38" : "#24512f";
-        c.fillRect(x, H - th, 40, th);
+      // deterministic starfield, slow parallax drift
+      for (let i = 0; i < 90; i++) {
+        const seed = i * 137.5;
+        const x = ((seed * 7.3) % W) + t * (2 + (i % 3));
+        const y = (seed * 13.7) % (H * 0.85);
+        const tw = 0.55 + 0.45 * Math.sin(t * 2 + i);
+        c.fillStyle = `rgba(240,238,255,${0.25 + 0.5 * tw * ((i % 4) / 4)})`;
         c.beginPath();
-        c.fillStyle = i % 2 ? "#3a7a48" : "#2f6b3c";
-        c.arc(x + 20, H - th, 55, 0, Math.PI * 2);
+        c.arc(x % W, y, i % 5 === 0 ? 1.8 : 1, 0, Math.PI * 2);
         c.fill();
       }
-      // light rays
-      c.fillStyle = "rgba(255,255,200,0.15)";
-      for (let r = 0; r < 5; r++) c.fillRect(W * (0.1 + r * 0.2) + t * 30, 0, 30, H);
-    },
-  },
-  {
-    name: "NEON",
-    draw: (c, t, W, H) => {
-      c.fillStyle = "#0d0221";
-      c.fillRect(0, 0, W, H);
-      // rotating neon grid (spin transition target)
-      c.save();
-      c.translate(W / 2, H / 2);
-      c.rotate(t * 0.6);
-      c.strokeStyle = "#ff2bd6";
-      c.lineWidth = 3;
-      for (let i = -10; i <= 10; i++) {
-        c.globalAlpha = 0.5;
+      // one meteor, once
+      if (t > 0.55 && t < 0.75) {
+        const p = (t - 0.55) / 0.2;
+        const mx = W * 0.75 - p * W * 0.4;
+        const my = H * 0.18 + p * H * 0.16;
+        const grad = c.createLinearGradient(mx + 60, my - 30, mx, my);
+        grad.addColorStop(0, "rgba(240,238,255,0)");
+        grad.addColorStop(1, "rgba(240,238,255,0.9)");
+        c.strokeStyle = grad;
+        c.lineWidth = 2.5;
         c.beginPath();
-        c.moveTo(i * 60, -H);
-        c.lineTo(i * 60, H);
+        c.moveTo(mx + 60, my - 30);
+        c.lineTo(mx, my);
         c.stroke();
       }
-      c.strokeStyle = "#2bd6ff";
-      for (let i = -10; i <= 10; i++) {
-        c.beginPath();
-        c.moveTo(-W, i * 60);
-        c.lineTo(W, i * 60);
-        c.stroke();
-      }
-      c.restore();
-      // pulsing sun
-      c.globalAlpha = 1;
-      const r = 120 + Math.sin(t * 8) * 20;
-      const sun = c.createLinearGradient(W / 2 - r, H / 2 - r, W / 2 + r, H / 2 + r);
-      sun.addColorStop(0, "#ff2bd6");
-      sun.addColorStop(1, "#ffb63c");
-      c.fillStyle = sun;
+      // dark ridge foreground
+      c.fillStyle = DUSK.silhouette;
       c.beginPath();
-      c.arc(W / 2, H * 0.42, r, 0, Math.PI * 2);
+      c.moveTo(0, H);
+      for (let x = 0; x <= W; x += 14) c.lineTo(x, H * 0.88 + Math.sin(x / 90) * 26);
+      c.lineTo(W, H);
       c.fill();
     },
   },
   {
-    name: "SUNRISE",
+    // dawn returns — sun rising through thin cloud bands, birds
+    name: "dawn",
     draw: (c, t, W, H) => {
       const g = c.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#2a1a4a");
-      g.addColorStop(0.6, "#ff7e5f");
-      g.addColorStop(1, "#feb47b");
+      g.addColorStop(0, DUSK.skyTop);
+      g.addColorStop(0.45, DUSK.skyMid);
+      g.addColorStop(0.75, DUSK.amber);
+      g.addColorStop(1, DUSK.amberDeep);
       c.fillStyle = g;
       c.fillRect(0, 0, W, H);
-      // sun rising (zoom-out reveal)
-      c.save();
-      const z = 1.3 - t * 0.3;
-      c.translate(W / 2, H * 0.7);
-      c.scale(z, z);
-      const sun = c.createRadialGradient(0, 0, 0, 0, 0, 140);
-      sun.addColorStop(0, "#fff7d6");
-      sun.addColorStop(1, "rgba(255,247,214,0)");
+      const sy = H * 0.72 - t * H * 0.05;
+      const sun = c.createRadialGradient(W / 2, sy, 0, W / 2, sy, 150);
+      sun.addColorStop(0, "rgba(255,230,180,0.95)");
+      sun.addColorStop(0.6, "rgba(232,149,92,0.3)");
+      sun.addColorStop(1, "rgba(232,149,92,0)");
       c.fillStyle = sun;
+      c.fillRect(0, 0, W, H);
+      // thin cloud bands crossing the sun
+      for (let i = 0; i < 4; i++) {
+        const y = H * (0.6 + i * 0.05) - t * 8;
+        c.fillStyle = `rgba(26,29,44,${0.5 - i * 0.08})`;
+        c.fillRect(0, y, W, 8 - i);
+      }
+      // distant birds — two-arc glyphs drifting
+      c.strokeStyle = "rgba(18,20,31,0.8)";
+      c.lineWidth = 2;
+      for (let b = 0; b < 5; b++) {
+        const bx = W * (0.25 + b * 0.11) + t * 24;
+        const by = H * (0.3 + (b % 3) * 0.05) + Math.sin(t * 3 + b) * 4;
+        c.beginPath();
+        c.arc(bx - 5, by, 5, Math.PI * 1.1, Math.PI * 1.9);
+        c.arc(bx + 5, by, 5, Math.PI * 1.1, Math.PI * 1.9);
+        c.stroke();
+      }
+      c.fillStyle = DUSK.silhouette;
       c.beginPath();
-      c.arc(0, -t * 100, 140, 0, Math.PI * 2);
+      c.moveTo(0, H);
+      for (let x = 0; x <= W; x += 14) c.lineTo(x, H * 0.9 + Math.sin(x / 150 + 2) * 20);
+      c.lineTo(W, H);
       c.fill();
-      c.restore();
-      c.fillStyle = "#1a0f2e";
-      hill(c, W, H, 0.85, 70, 0);
     },
   },
 ];
-
-function hill(c: CanvasRenderingContext2D, W: number, H: number, base: number, amp: number, phase: number) {
-  c.beginPath();
-  c.moveTo(0, H);
-  for (let x = 0; x <= W; x += 20) c.lineTo(x, H * base + Math.sin(x / 120 + phase / 60) * amp);
-  c.lineTo(W, H);
-  c.closePath();
-  c.fill();
-}
-
-function label(c: CanvasRenderingContext2D, text: string, W: number, H: number) {
-  c.font = "700 34px system-ui, sans-serif";
-  c.textAlign = "center";
-  c.fillStyle = "rgba(0,0,0,0.35)";
-  c.fillText(text, W / 2 + 2, H * 0.92 + 2);
-  c.fillStyle = "#ffffff";
-  c.fillText(text, W / 2, H * 0.92);
-}
 
 async function captureScene(scene: { name: string; draw: Draw }, seconds: number): Promise<Blob> {
   const W = 540, H = 960;
@@ -222,7 +219,7 @@ async function captureScene(scene: { name: string; draw: Draw }, seconds: number
   const ctx = canvas.getContext("2d")!;
   const rec = new MediaRecorder(canvas.captureStream(30), {
     mimeType: "video/webm;codecs=vp8",
-    videoBitsPerSecond: 4_000_000,
+    videoBitsPerSecond: 5_000_000,
   });
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => chunks.push(e.data);
@@ -234,7 +231,6 @@ async function captureScene(scene: { name: string; draw: Draw }, seconds: number
       const t = (performance.now() - t0) / 1000;
       if (t >= seconds) return done();
       scene.draw(ctx, t / seconds, W, H);
-      label(ctx, scene.name, W, H);
       requestAnimationFrame(frame);
     }
     frame();
@@ -247,65 +243,73 @@ async function captureScene(scene: { name: string; draw: Draw }, seconds: number
 export default function DemoPage() {
   const [status, setStatus] = useState("idle");
   const [url, setUrl] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   async function run() {
-    setStatus("drawing scenes…");
+    setStatus("filming scenes…");
     const clips = new Map<string, Blob>();
     const segments: TimelineSegment[] = [];
-    // a curated transition sequence showing off the smooth ones
-    const seq: TimelineSegment["transitionAfter"][] = [
-      "whip-pan", "zoom-in", "fade", "spin", "zoom-out", null,
+    // The cut: cuts + fades only; ONE light-leak into the star scene (the
+    // emotional peak). Shot lengths breathe: 2.4 / 2.2 / 2.6 / 3.0 / 3.2.
+    const cutPlan: { lenSec: number; transitionAfter: TimelineSegment["transitionAfter"] }[] = [
+      { lenSec: 2.4, transitionAfter: "hard-cut" },
+      { lenSec: 2.2, transitionAfter: "fade" },
+      { lenSec: 2.6, transitionAfter: "light-leak" },
+      { lenSec: 3.0, transitionAfter: "fade" },
+      { lenSec: 3.2, transitionAfter: null },
     ];
     for (let i = 0; i < SCENES.length; i++) {
-      setStatus(`capturing ${SCENES[i].name}… (${i + 1}/${SCENES.length})`);
-      const blob = await captureScene(SCENES[i], 2.0);
+      setStatus(`filming ${SCENES[i].name}… (${i + 1}/${SCENES.length})`);
+      const blob = await captureScene(SCENES[i], cutPlan[i].lenSec + 0.4);
       const id = uuid();
       clips.set(id, blob);
       segments.push({
         id: uuid(),
         clipId: id,
-        start: 0,
-        end: 1.8,
-        transitionAfter: seq[i],
+        start: 0.1,
+        end: 0.1 + cutPlan[i].lenSec,
+        transitionAfter: cutPlan[i].transitionAfter,
         speed: 1,
       });
     }
-    // estimated output duration for audio + caption timing
+
     let outDur = 0;
-    for (const sg of segments) outDur += (sg.end - sg.start) / sg.speed;
+    for (const sg of segments) outDur += sg.end - sg.start;
     for (let i = 0; i < segments.length - 1; i++) {
       const r = transitionByType(segments[i].transitionAfter ?? "hard-cut");
       if (r.xfade && r.defaultDuration > 0) outDur -= r.defaultDuration;
     }
 
-    setStatus("styling captions + title…");
-    const captions: BurnCaption[] = [];
-    captions.push({ png: await renderTitleCard({ title: "VIRALEDIT", subtitle: "cinematic engine demo", style: "epic" }), start: 0, end: 2 });
-    captions.push(...(await kineticWordCues("SIX SCENES ONE TAP", 2.2, 5.4)));
-    captions.push({ png: await renderCuePng("AI EDITED 🔥", "highlight"), start: 5.6, end: outDur });
+    // One quiet title. Nothing else on screen, ever.
+    setStatus("title…");
+    const captions: BurnCaption[] = [
+      {
+        png: await renderTitleCard({ title: "golden hour", subtitle: "cut by ViralEdit", style: "minimal" }),
+        start: 0.4,
+        end: 2.3,
+      },
+    ];
 
-    setStatus("composing score + sfx…");
-    const score = await composeScore({ bpm: 110, seconds: outDur + 0.5, mood: "epic" });
-    const sfxAt: { time: number; type: SfxType }[] = [];
-    let clock = 0;
-    for (const sg of segments) {
-      clock += (sg.end - sg.start) / sg.speed;
-      const r = transitionByType(sg.transitionAfter ?? "hard-cut");
-      if (sg.transitionAfter && r.xfade) clock -= r.defaultDuration;
-      const sfx = sg.transitionAfter ? SFX_FOR_TRANSITION[sg.transitionAfter] : undefined;
-      if (sfx && clock < outDur) sfxAt.push({ time: Number(clock.toFixed(2)), type: sfx });
-    }
+    // Chill score at 88 BPM; exactly TWO sound moments: a soft whoosh into
+    // the light-leak, and a low impact when the stars arrive.
+    setStatus("score…");
+    const score = await composeScore({ bpm: 88, seconds: outDur + 0.5, mood: "chill" });
+    const leakAt = segments.slice(0, 3).reduce((s, x) => s + (x.end - x.start), 0) - 0.45 - 0.5;
+    const sfxAt: { time: number; type: SfxType }[] = [
+      { time: Number(leakAt.toFixed(2)), type: "whoosh" },
+      { time: Number((leakAt + 0.45).toFixed(2)), type: "impact" },
+    ];
     const audio = await mixTimeline({ seconds: outDur + 0.5, music: score, sfxAt });
 
-    setStatus("generating embers…");
-    const embers = await generateOverlayClip("embers", outDur + 1);
-
-    setStatus("rendering the full cinematic stack…");
-    const look = cinematicify();
+    // The look: A24 Indie with restrained grain/vignette. No letterbox on
+    // vertical. No halation. No atmosphere layer — the scenes carry it.
+    setStatus("rendering…");
     const out = await renderEdit(clips, segments, {
-      look,
-      overlay: { blob: embers, opacity: 0.55 },
+      look: {
+        ...DEFAULT_LOOK,
+        grade: "a24-indie",
+        grain: 0.18,
+        vignette: 0.3,
+      },
       music: audio,
       captions,
       onProgress: (pct, msg) => setStatus(`${msg} (${pct}%)`),
@@ -324,8 +328,8 @@ export default function DemoPage() {
 
   return (
     <main className="p-6">
-      <h1 className="mb-2 text-lg font-bold">Transition showcase — {status}</h1>
-      {url && <video ref={videoRef} src={url} controls loop className="w-72 rounded-xl" />}
+      <h1 className="mb-2 text-lg font-bold">Golden hour — {status}</h1>
+      {url && <video src={url} controls loop className="w-72 rounded-xl" />}
     </main>
   );
 }

@@ -15,6 +15,7 @@ import { analyzeClip, type ClipAnalysis } from "@/lib/clip-analysis";
 import { isStaticShot, motionCentroidX, reframeFilter } from "@/lib/motion";
 import { generateOverlayClip } from "@/lib/overlays";
 import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
 import StudioPanel from "@/components/StudioPanel";
 import InsightsPanel from "@/components/InsightsPanel";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
@@ -46,6 +47,7 @@ export default function EditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
   const [listening, setListening] = useState(false);
+  const [tasteNotes, setTasteNotes] = useState<string[]>([]);
 
   // #8 uniqueness: voice-directed editing via the Web Speech API
   function handleVoiceDirection() {
@@ -189,7 +191,15 @@ export default function EditorPage() {
           blobs.set(seg.clipId, v.blob);
         }
       }
-      const outDur = estimateOutputDuration(plan.segments);
+      // The taste pass: enforce editorial restraint (one transition
+      // language, flash limits, effect budget, tight hook) before anything
+      // is built. This is the difference between an edit and a demo reel.
+      const taste = applyTaste(plan, studio);
+      const plan2 = taste.plan;
+      const studio2 = taste.studio;
+      setTasteNotes(taste.report.changes);
+
+      const outDur = estimateOutputDuration(plan2.segments);
 
       // Captions: typed lines → full-line cues or kinetic word-pops.
       const burnCaptions: BurnCaption[] = [];
@@ -198,7 +208,7 @@ export default function EditorPage() {
         setBusy("Styling captions…");
         const cues = layoutCaptions(lines, outDur, beats?.beatTimes);
         for (const cue of cues) {
-          if (studio.kineticCaptions) {
+          if (studio2.kineticCaptions) {
             burnCaptions.push(...(await kineticWordCues(cue.text, cue.start, cue.end)));
           } else {
             burnCaptions.push({ png: await renderCuePng(cue.text, captionStyle), start: cue.start, end: cue.end });
@@ -207,15 +217,15 @@ export default function EditorPage() {
       }
 
       // Title card over the first ~2.2s, credits over the tail.
-      if (studio.titleCard?.title) {
+      if (studio2.titleCard?.title) {
         setBusy("Rendering title card…");
         burnCaptions.push({
-          png: await renderTitleCard(studio.titleCard),
+          png: await renderTitleCard(studio2.titleCard),
           start: 0,
           end: Math.min(2.2, outDur),
         });
       }
-      const creditLines = studio.credits.split("\n").map((l) => l.trim()).filter(Boolean);
+      const creditLines = studio2.credits.split("\n").map((l) => l.trim()).filter(Boolean);
       if (creditLines.length > 0) {
         setBusy("Rolling credits…");
         const pages = await renderCreditsPages(creditLines);
@@ -228,7 +238,7 @@ export default function EditorPage() {
 
       // Per-clip auto color/exposure normalize (#5/#46)
       const normalizeByClip = new Map<string, string>();
-      if (studio.look.autoNormalize) {
+      if (studio2.look.autoNormalize) {
         setBusy("Matching color across clips…");
         const stats = new Map<string, Awaited<ReturnType<typeof measureColor>>>();
         for (const [id, blob] of blobs) stats.set(id, await measureColor(blob));
@@ -241,7 +251,7 @@ export default function EditorPage() {
 
       // Subject-aware reframe (#11)
       const reframeByClip = new Map<string, string>();
-      if (studio.autoReframe) {
+      if (studio2.autoReframe) {
         setBusy("Finding your subject…");
         for (const [id, blob] of blobs) {
           reframeByClip.set(id, reframeFilter(await motionCentroidX(blob)));
@@ -250,11 +260,11 @@ export default function EditorPage() {
 
       // Auto Ken Burns on static shots (#6)
       const motionBySegment = new Map<string, import("@/lib/motion").MotionEffect>();
-      if (studio.autoKenBurns) {
+      if (studio2.autoKenBurns) {
         setBusy("Adding virtual camera moves…");
         const analyses = new Map<string, ClipAnalysis>();
         for (const [id, blob] of blobs) analyses.set(id, await analyzeClip(blob, { samplesPerSecond: 5, maxSamples: 60 }));
-        plan.segments.forEach((seg, i) => {
+        plan2.segments.forEach((seg, i) => {
           const a = analyses.get(seg.clipId);
           if (a && isStaticShot(a, seg.start, seg.end)) {
             motionBySegment.set(seg.id, i % 2 === 0 ? "ken-burns-in" : "ken-burns-out");
@@ -264,37 +274,45 @@ export default function EditorPage() {
 
       // Atmosphere overlay clip (#17/#19/#39)
       let overlay: RenderOptions["overlay"];
-      if (studio.overlay) {
-        setBusy(`Generating ${studio.overlay} layer…`);
-        overlay = { blob: await generateOverlayClip(studio.overlay, outDur + 1), opacity: studio.overlayOpacity };
+      if (studio2.overlay) {
+        setBusy(`Generating ${studio2.overlay} layer…`);
+        overlay = { blob: await generateOverlayClip(studio2.overlay, outDur + 1), opacity: studio2.overlayOpacity };
       }
 
       // Audio: uploaded music, or composed score; plus auto SFX; mixed once.
       let finalAudio: Blob | undefined = music?.blob;
       const sfxAt: { time: number; type: SfxType }[] = [];
-      if (studio.autoSfx) {
+      if (studio2.autoSfx) {
         let clock = 0;
-        for (const seg of plan.segments) {
+        for (const seg of plan2.segments) {
           clock += (seg.end - seg.start) / seg.speed;
           const recipe = transitionByType(seg.transitionAfter ?? "hard-cut");
           if (seg.transitionAfter && recipe.xfade) clock -= recipe.defaultDuration;
           const sfx = seg.transitionAfter ? SFX_FOR_TRANSITION[seg.transitionAfter] : undefined;
           if (sfx && clock < outDur) sfxAt.push({ time: Number(clock.toFixed(2)), type: sfx });
         }
+        const restrained = restrainSfx(plan2, sfxAt, taste.report);
+        sfxAt.length = 0;
+        sfxAt.push(...restrained);
+        setTasteNotes([...taste.report.changes]);
       }
-      if (!finalAudio && studio.scoreMood) {
+      if (studio2.titleCard?.title && burnCaptions.length > 0) {
+        cleanCaptionWindows(burnCaptions, { start: 0, end: Math.min(2.2, outDur) }, taste.report);
+        setTasteNotes([...taste.report.changes]);
+      }
+      if (!finalAudio && studio2.scoreMood) {
         setBusy("Composing your score…");
-        finalAudio = await composeScore({ bpm: beats?.bpm ?? blueprint?.beats?.bpm ?? 100, seconds: outDur + 0.5, mood: studio.scoreMood });
+        finalAudio = await composeScore({ bpm: beats?.bpm ?? blueprint?.beats?.bpm ?? 100, seconds: outDur + 0.5, mood: studio2.scoreMood });
       }
       if (finalAudio || sfxAt.length > 0) {
         setBusy("Mixing audio…");
         finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt });
       }
 
-      const out = await renderEdit(blobs, plan.segments, {
-        colorGrade: plan.colorGrade,
-        look: { ...studio.look, grade: studio.look.grade === "none" ? plan.colorGrade : studio.look.grade },
-        motionDefault: studio.motionDefault,
+      const out = await renderEdit(blobs, plan2.segments, {
+        colorGrade: plan2.colorGrade,
+        look: { ...studio2.look, grade: studio2.look.grade === "none" ? plan2.colorGrade : studio2.look.grade },
+        motionDefault: studio2.motionDefault,
         motionBySegment,
         normalizeByClip,
         reframeByClip,
@@ -559,6 +577,14 @@ export default function EditorPage() {
       )}
       {error && (
         <div className="mt-5 rounded-xl bg-red-500/10 px-4 py-3 text-center text-sm text-red-400">{error}</div>
+      )}
+      {tasteNotes.length > 0 && (
+        <div className="card mt-5 px-4 py-3">
+          <p className="text-xs font-bold text-neutral-300">🎬 Director&apos;s notes — restraint applied</p>
+          {tasteNotes.map((n, i) => (
+            <p key={i} className="mt-1 text-[11px] leading-4 text-neutral-500">• {n}</p>
+          ))}
+        </div>
       )}
 
       {/* Transition picker sheet */}

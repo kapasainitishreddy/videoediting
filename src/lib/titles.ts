@@ -45,18 +45,30 @@ export async function renderTitleCard(opts: {
     ctx.fillText(opts.title, W / 2, H * 0.47);
     ctx.fillText("▌", W / 2 + ctx.measureText(opts.title).width / 2 + 22, H * 0.47);
   } else {
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.fillRect(0, 0, W, H);
-    ctx.font = "800 76px Arial, sans-serif";
-    ctx.textAlign = "center";
+    // minimal: no full-frame scrim — a soft bottom gradient and small,
+    // confident type. The footage stays the star.
+    const g = ctx.createLinearGradient(0, H * 0.62, 0, H);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, H * 0.62, W, H * 0.38);
+    ctx.font = "600 44px Arial, sans-serif";
+    ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(opts.title, W / 2, H * 0.47);
+    ctx.fillText(opts.title, 56, H * 0.86);
+    ctx.fillStyle = "#ff5c35";
+    ctx.fillRect(56, H * 0.875, 54, 3);
   }
   if (opts.subtitle) {
     ctx.font = "500 34px Arial, sans-serif";
     ctx.fillStyle = "rgba(255,255,255,0.75)";
-    ctx.textAlign = "center";
-    ctx.fillText(opts.subtitle, W / 2, H * 0.53);
+    if (opts.style === "minimal" || !opts.style) {
+      ctx.textAlign = "left";
+      ctx.fillText(opts.subtitle, 56, H * 0.915);
+    } else {
+      ctx.textAlign = "center";
+      ctx.fillText(opts.subtitle, W / 2, H * 0.53);
+    }
   }
   return new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
 }
