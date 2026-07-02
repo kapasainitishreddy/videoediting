@@ -2,8 +2,14 @@
 
 // FFmpeg WebAssembly wrapper — all video processing runs in the browser,
 // so footage never leaves the device.
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+//
+// The @ffmpeg/ffmpeg library is loaded UNBUNDLED from /public/ffmpeg/lib
+// (copied there by scripts/copy-ffmpeg-core.js). Bundlers rewrite the
+// dynamic import() inside its worker ("expression is too dynamic" under
+// Turbopack), which breaks FFmpeg loading entirely — native ESM loading
+// sidesteps the bundler for the worker chain.
+import type { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile } from "@ffmpeg/util";
 import type { TimelineSegment } from "./types";
 import { transitionByType, COLOR_GRADES } from "./transitions";
 
@@ -23,15 +29,17 @@ export async function getFFmpeg(onProgress?: (p: number) => void): Promise<FFmpe
   if (loading) return loading;
 
   loading = (async () => {
-    const instance = new FFmpeg();
+    const libUrl = `${window.location.origin}/ffmpeg/lib/index.js`;
+    const mod = (await import(
+      /* webpackIgnore: true */ /* turbopackIgnore: true */ libUrl
+    )) as typeof import("@ffmpeg/ffmpeg");
+    const instance = new mod.FFmpeg();
     if (onProgress) {
       instance.on("progress", ({ progress }) => onProgress(Math.min(1, progress)));
     }
-    // Serve core from our own origin (copied into /public/ffmpeg at build)
-    const base = "/ffmpeg";
     await instance.load({
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+      coreURL: `${window.location.origin}/ffmpeg/ffmpeg-core.js`,
+      wasmURL: `${window.location.origin}/ffmpeg/ffmpeg-core.wasm`,
     });
     ffmpeg = instance;
     return instance;
@@ -66,15 +74,27 @@ export async function extractFrames(video: Blob, count = 16): Promise<Blob[]> {
   return frames;
 }
 
-// Fast duration probe using a <video> element (no ffmpeg needed)
+// Fast duration probe using a <video> element (no ffmpeg needed).
+// MediaRecorder-produced WebM reports Infinity until you seek far past the
+// end (Chrome quirk) — handle that so in-browser recordings work too.
 export function probeDuration(blob: Blob): Promise<number> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const v = document.createElement("video");
     v.preload = "metadata";
-    v.onloadedmetadata = () => {
+    const done = (d: number) => {
       URL.revokeObjectURL(url);
-      resolve(v.duration);
+      resolve(d);
+    };
+    v.onloadedmetadata = () => {
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        done(v.duration);
+        return;
+      }
+      // Infinity-duration workaround: seek to an absurd time; the browser
+      // clamps to the real end and duration becomes finite.
+      v.onseeked = () => done(Number.isFinite(v.duration) ? v.duration : v.currentTime);
+      v.currentTime = 1e7;
     };
     v.onerror = () => {
       URL.revokeObjectURL(url);
@@ -169,7 +189,8 @@ export async function renderEdit(
   clips: Map<string, Blob>,
   segments: TimelineSegment[],
   colorGrade: string,
-  onProgress?: (pct: number, msg: string) => void
+  onProgress?: (pct: number, msg: string) => void,
+  music?: Blob
 ): Promise<Blob> {
   const ff = await getFFmpeg();
   const gradeFilter = COLOR_GRADES[colorGrade]?.filter ?? "";
@@ -202,8 +223,7 @@ export async function renderEdit(
   }
 
   if (segFiles.length === 1) {
-    const data = await ff.readFile(segFiles[0].file);
-    return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
+    return finalize(ff, segFiles[0].file, music, onProgress);
   }
 
   // 2. Chain xfades left-to-right
@@ -234,10 +254,35 @@ export async function renderEdit(
     onProgress?.(60 + Math.round((i / (segFiles.length - 1)) * 35), `Transition ${i}/${segFiles.length - 1}`);
   }
 
-  onProgress?.(97, "Finalizing…");
-  const data = await ff.readFile(current);
-  // cleanup
   for (const s of segFiles) await ff.deleteFile(s.file).catch(() => {});
-  await ff.deleteFile(current).catch(() => {});
+  return finalize(ff, current, music, onProgress);
+}
+
+// Optionally lay a music track under the finished cut, then read it out.
+async function finalize(
+  ff: FFmpeg,
+  videoFile: string,
+  music: Blob | undefined,
+  onProgress?: (pct: number, msg: string) => void
+): Promise<Blob> {
+  let out = videoFile;
+  if (music) {
+    onProgress?.(96, "Adding music…");
+    await ff.writeFile("music_in", await fetchFile(music));
+    const code = await ff.exec([
+      "-i", videoFile, "-i", "music_in",
+      "-map", "0:v", "-map", "1:a",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+      "-shortest", "with_music.mp4",
+    ]);
+    if (code === 0) {
+      out = "with_music.mp4";
+    }
+    await ff.deleteFile("music_in").catch(() => {});
+  }
+  onProgress?.(98, "Finalizing…");
+  const data = await ff.readFile(out);
+  await ff.deleteFile(videoFile).catch(() => {});
+  if (out !== videoFile) await ff.deleteFile(out).catch(() => {});
   return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
 }

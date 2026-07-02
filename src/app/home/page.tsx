@@ -2,13 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Upload, Clapperboard, ChevronRight } from "lucide-react";
+import { Link2, Upload, Clapperboard, ChevronRight, Flame } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, listBlueprints } from "@/lib/storage";
+import { VIRAL_TEMPLATES } from "@/lib/templates";
+import { useProject } from "@/store/project";
 import type { EditBlueprint } from "@/lib/types";
 
 export default function Home() {
   const router = useRouter();
+  const { setBlueprint } = useProject();
   const fileRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -122,6 +125,32 @@ export default function Home() {
           {error}
         </div>
       )}
+
+      {/* Viral templates */}
+      <section className="mt-10">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-neutral-500">
+          <Flame size={14} className="text-accent" /> Start from a viral template
+        </h2>
+        <div className="-mx-6 flex gap-3 overflow-x-auto px-6 pb-2">
+          {VIRAL_TEMPLATES.map((tpl) => (
+            <button
+              key={tpl.id}
+              onClick={() => {
+                setBlueprint(tpl);
+                router.push("/editor");
+              }}
+              className="card flex w-40 shrink-0 flex-col items-start p-4 text-left active:border-accent"
+            >
+              <span className="text-3xl">{tpl.emoji}</span>
+              <span className="mt-2 text-sm font-bold">{tpl.sourceName}</span>
+              <span className="mt-1 text-xs leading-4 text-neutral-500">{tpl.tagline}</span>
+              <span className="mt-2 font-mono text-[10px] text-accent">
+                {tpl.beats?.bpm} BPM · {tpl.transitions.length} cuts
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       {/* Recent blueprints */}
       {recent.length > 0 && (

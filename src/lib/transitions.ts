@@ -28,8 +28,8 @@ export const TRANSITIONS: TransitionRecipe[] = [
     label: "Whip Pan",
     emoji: "💨",
     description: "Fast horizontal blur-slide, like the camera whipped sideways.",
-    xfade: "slideleft",
-    defaultDuration: 0.25,
+    xfade: "smoothleft",
+    defaultDuration: 0.35,
     beginnerTip: "End clip A panning left, start clip B panning left — the motion hides the cut.",
   },
   {
@@ -38,7 +38,7 @@ export const TRANSITIONS: TransitionRecipe[] = [
     emoji: "🔍",
     description: "Punch-in zoom burst into the next clip.",
     xfade: "zoomin",
-    defaultDuration: 0.3,
+    defaultDuration: 0.4,
     beginnerTip: "Zoom toward the subject's face or the action point, never dead center.",
   },
   {
@@ -83,7 +83,7 @@ export const TRANSITIONS: TransitionRecipe[] = [
     emoji: "🌀",
     description: "Rotational whip into the next shot.",
     xfade: "circleopen",
-    defaultDuration: 0.3,
+    defaultDuration: 0.4,
     beginnerTip: "Match rotation direction across both clips for a seamless feel.",
   },
   {
@@ -110,7 +110,7 @@ export const TRANSITIONS: TransitionRecipe[] = [
     emoji: "😵‍💫",
     description: "Defocus out, refocus into the next clip.",
     xfade: "hblur",
-    defaultDuration: 0.4,
+    defaultDuration: 0.5,
     beginnerTip: "Works best between two visually busy shots.",
   },
   {

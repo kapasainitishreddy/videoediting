@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "node scripts/copy-ffmpeg-core.js"
+    "postinstall": "node scripts/copy-ffmpeg-core.js",
+    "test:e2e": "node scripts/e2e-test.mjs",
+    "test:xfade": "node scripts/xfade-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",
@@ -39,6 +41,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "playwright": "^1.61.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

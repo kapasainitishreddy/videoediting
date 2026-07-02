@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit } from "@/lib/ffmpeg-client";
@@ -23,8 +23,10 @@ const PROMPT_IDEAS = [
 export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
+  const musicRef = useRef<HTMLInputElement>(null);
   const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, setRenderedUrl } = useProject();
 
+  const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
   const [direction, setDirection] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [renderPct, setRenderPct] = useState(0);
@@ -117,10 +119,16 @@ export default function EditorPage() {
           blobs.set(seg.clipId, v.blob);
         }
       }
-      const out = await renderEdit(blobs, plan.segments, plan.colorGrade, (pct, msg) => {
-        setRenderPct(pct);
-        setBusy(msg);
-      });
+      const out = await renderEdit(
+        blobs,
+        plan.segments,
+        plan.colorGrade,
+        (pct, msg) => {
+          setRenderPct(pct);
+          setBusy(msg);
+        },
+        music?.blob
+      );
       const url = URL.createObjectURL(out);
       setRenderedUrl(url);
       router.push("/export");
@@ -250,6 +258,37 @@ export default function EditorPage() {
                 </div>
               );
             })}
+          </div>
+
+          {/* Music */}
+          <div className="mt-3">
+            <label className="text-xs font-semibold text-neutral-500">Music</label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <button
+                onClick={() => musicRef.current?.click()}
+                className={`flex items-center gap-2 rounded-full px-4 py-2 text-xs ${
+                  music ? "bg-accent/15 font-semibold text-accent" : "border border-card-border text-neutral-400"
+                }`}
+              >
+                <Music size={13} />
+                {music ? music.name.slice(0, 28) : "Add a music track"}
+              </button>
+              {music && (
+                <button onClick={() => setMusic(null)} className="text-neutral-600" aria-label="Remove music">
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+            <input
+              ref={musicRef}
+              type="file"
+              accept="audio/*"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) setMusic({ name: f.name, blob: f });
+              }}
+            />
           </div>
 
           {/* Color grade */}
