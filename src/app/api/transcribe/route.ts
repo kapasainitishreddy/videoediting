@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
+import { checkRateLimit, clientIp, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 120;
+
+const LIMIT = 15;
+const WINDOW_MS = 10 * 60_000;
 
 // Optional speech-to-text for auto-captions. Send an audio file (extracted
 // from a clip in the browser) and get back timed lines. Uses OpenAI Whisper
@@ -10,6 +14,9 @@ export const maxDuration = 120;
 // (MiniMax's text key doesn't cover speech-to-text, so it isn't used here;
 // typed captions cover the no-ASR case.)
 export async function POST(req: NextRequest) {
+  const rl = checkRateLimit(`${clientIp(req)}:transcribe`, LIMIT, WINDOW_MS);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
     return Response.json(

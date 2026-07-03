@@ -66,7 +66,7 @@ export default function FiltersProbe() {
             await ff.deleteFile("o.mp4");
           }
           r[name] = code === 0 && size > 300 ? "ok" : `fail(${code})`;
-        } catch (e) {
+        } catch {
           r[name] = "throw";
         }
         setOut({ ...r });

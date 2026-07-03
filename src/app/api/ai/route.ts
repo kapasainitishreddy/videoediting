@@ -6,8 +6,15 @@ import {
   normalizeEditPlan,
   type NormalizedEditPlan,
 } from "@/lib/ai-schema";
+import { checkRateLimit, clientIp, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
+
+// Each call here is a paid API request to whichever provider is
+// configured — cap per IP so one visitor can't run up your MiniMax/
+// Anthropic/OpenAI bill.
+const LIMIT = 30;
+const WINDOW_MS = 5 * 60_000;
 
 // Provider-agnostic AI layer. Add ANY ONE of MINIMAX_API_KEY,
 // ANTHROPIC_API_KEY, or OPENAI_API_KEY to .env.local and this route works —
@@ -24,6 +31,9 @@ export const maxDuration = 60;
 //
 // POST { task: "label-transitions" | "edit-directions", payload, provider? }
 export async function POST(req: NextRequest) {
+  const rl = checkRateLimit(`${clientIp(req)}:ai`, LIMIT, WINDOW_MS);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   let body: { task?: string; payload?: unknown; provider?: string };
   try {
     body = await req.json();

@@ -175,7 +175,6 @@ export default function DetectTest() {
       setPass(false);
       (window as unknown as { detectResult: unknown }).detectResult = { pass: false, error: String(e) };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

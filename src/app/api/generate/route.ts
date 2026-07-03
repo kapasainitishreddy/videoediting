@@ -1,6 +1,12 @@
 import { NextRequest } from "next/server";
+import { checkRateLimit, clientIp, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
+
+// Video generation is the most expensive call in the app per-request
+// (real compute on MiniMax's side) — keep this tight.
+const LIMIT = 10;
+const WINDOW_MS = 15 * 60_000;
 
 // AI B-roll generation (#36) via MiniMax video generation, key-gated.
 // POST { action: "submit", prompt }  → { taskId }
@@ -8,6 +14,9 @@ export const maxDuration = 300;
 // Without MINIMAX_API_KEY this reports unavailable — the app treats AI
 // generation as an optional Lab feature, never a dependency.
 export async function POST(req: NextRequest) {
+  const rl = checkRateLimit(`${clientIp(req)}:generate`, LIMIT, WINDOW_MS);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   const key = process.env.MINIMAX_API_KEY;
   if (!key) {
     return Response.json(

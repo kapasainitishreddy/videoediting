@@ -10,14 +10,13 @@ export default function ExportPage() {
   const router = useRouter();
   const { renderedUrl, setRenderedUrl } = useProject();
   const [shared, setShared] = useState(false);
-  // null = still checking, "missing" = confirmed gone, "ready" = playable
-  const [status, setStatus] = useState<"checking" | "missing" | "ready">("checking");
+  // Only tracks the genuinely async branch (the IndexedDB lookup after a
+  // reload). When renderedUrl is already set, "ready" is derived directly
+  // from props during render below — no effect/state needed for that case.
+  const [recovery, setRecovery] = useState<"checking" | "missing" | null>(renderedUrl ? null : "checking");
 
   useEffect(() => {
-    if (renderedUrl) {
-      setStatus("ready");
-      return;
-    }
+    if (renderedUrl) return; // nothing to recover — derived state below handles it
     // The store's renderedUrl (a blob: URL) always dies on reload — that's
     // expected, not an error. Before giving up, check IndexedDB for the
     // actual render bytes the editor saved and rebuild a fresh URL.
@@ -25,17 +24,15 @@ export default function ExportPage() {
     (async () => {
       const blob = await getRenderedVideo();
       if (cancelled) return;
-      if (blob) {
-        setRenderedUrl(URL.createObjectURL(blob));
-        setStatus("ready");
-      } else {
-        setStatus("missing");
-      }
+      if (blob) setRenderedUrl(URL.createObjectURL(blob));
+      else setRecovery("missing");
     })();
     return () => {
       cancelled = true;
     };
   }, [renderedUrl, setRenderedUrl]);
+
+  const status: "checking" | "missing" | "ready" = renderedUrl ? "ready" : (recovery ?? "checking");
 
   if (status === "checking") {
     return (

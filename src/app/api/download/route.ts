@@ -3,8 +3,16 @@ import { spawn } from "child_process";
 import { mkdtemp, readFile, rm, readdir } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
+import { checkRateLimit, clientIp, rateLimitResponse } from "@/lib/rate-limit";
+import { reportError } from "@/lib/report-error";
 
 export const maxDuration = 120;
+
+// yt-dlp invocations are the most expensive thing this server does (a
+// spawned process + real network egress to the target platform) — cap
+// hard per IP so one visitor can't tie up every worker.
+const LIMIT = 8;
+const WINDOW_MS = 10 * 60_000; // 10 minutes
 
 const ALLOWED_HOSTS = [
   "instagram.com",
@@ -25,6 +33,9 @@ const ALLOWED_HOSTS = [
 // The file is deleted from the server immediately after the response is
 // built — the only durable copy lives in the browser's IndexedDB.
 export async function POST(req: NextRequest) {
+  const rl = checkRateLimit(`${clientIp(req)}:download`, LIMIT, WINDOW_MS);
+  if (!rl.ok) return rateLimitResponse(rl);
+
   let body: { url?: string };
   try {
     body = await req.json();
@@ -66,6 +77,7 @@ export async function POST(req: NextRequest) {
       const hint = result.stderr.includes("login")
         ? "This post may be private or age-restricted."
         : "The site may be blocking downloads right now.";
+      reportError(new Error(`yt-dlp exited ${result.code}`), { url: host, stderrTail: result.stderr.slice(-400) });
       return Response.json(
         { error: `Download failed. ${hint}`, detail: result.stderr.slice(-400) },
         { status: 502 }

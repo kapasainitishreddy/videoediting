@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -51,7 +52,7 @@ export default function RootLayout({
             paddingRight: "env(safe-area-inset-right)",
           }}
         >
-          {children}
+          <ErrorBoundary>{children}</ErrorBoundary>
         </div>
         <ServiceWorkerRegistrar />
       </body>

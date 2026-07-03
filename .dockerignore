@@ -1,0 +1,7 @@
+node_modules
+.next
+.git
+.env*.local
+*.log
+scripts/e2e-test.mjs
+scripts/xfade-check.mjs

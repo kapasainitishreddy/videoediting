@@ -198,7 +198,6 @@ export default function CineTest() {
       setPass(false);
       (window as unknown as { cineTest: unknown }).cineTest = { pass: false, error: String(e) };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

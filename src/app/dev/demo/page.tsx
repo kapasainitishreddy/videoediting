@@ -322,8 +322,10 @@ export default function DemoPage() {
   }
 
   useEffect(() => {
+    // Kicks off the async demo render once on mount; setState only happens
+    // inside the .catch continuation (fetch-on-mount pattern).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     run().catch((e) => setStatus(`error: ${e}`));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

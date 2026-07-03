@@ -40,6 +40,9 @@ export default function PersistTest() {
     if (params.get("verify") === "1") {
       // Second load (simulating reload): check what the store rehydrated,
       // WITHOUT re-seeding — proves persistence, not just fresh state.
+      // Reading location.search on mount to pick a mode is exactly what an
+      // effect is for; there's no render-time equivalent on a dev page.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPhase("verify");
     } else {
       setPlan(FAKE_PLAN);
@@ -56,6 +59,9 @@ export default function PersistTest() {
     const blueprintOk = blueprint?.sourceName === "persist-test-reel";
     const studioOk = studio.motionDefault === "ken-burns-in" && studio.scoreMood === "epic";
     const r = { planOk, blueprintOk, studioOk, plan, blueprint, studioMotion: studio.motionDefault };
+    // Deliberately syncing local test-result state FROM the store (an
+    // external system) once it settles — the documented use case for this.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResult(r);
     (window as unknown as { verifyResult: unknown }).verifyResult = r;
   }, [phase, plan, blueprint, studio]);
@@ -71,8 +77,10 @@ export default function PersistTest() {
   }
 
   useEffect(() => {
+    // Kicks off an async IndexedDB round-trip once on mount; setState
+    // happens inside its own async continuation (fetch-on-mount pattern).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     testRenderRecovery();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

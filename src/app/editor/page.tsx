@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Captions, Mic, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
-import { probeDuration, makeThumbnail, renderEdit, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
+import { probeDuration, makeThumbnail, renderEdit, getFFmpeg, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
 import { smartAutoEdit } from "@/lib/auto-edit";
 import { detectBeats, type BeatResult } from "@/lib/beats";
 import { CAPTION_STYLES, type CaptionStyleId, layoutCaptions, renderCuePng } from "@/lib/captions";
@@ -16,6 +16,8 @@ import { isStaticShot, motionCentroidX, reframeFilter } from "@/lib/motion";
 import { generateOverlayClip } from "@/lib/overlays";
 import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
 import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
+import { checkClipLimits } from "@/lib/limits";
+import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
 import InsightsPanel from "@/components/InsightsPanel";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
@@ -52,6 +54,7 @@ export default function EditorPage() {
   // WHICH step broke (captions vs color match vs mux) instead of a bare
   // "render failed" that gives no clue what to retry or report.
   const renderStageRef = useRef<string | null>(null);
+  const ffmpegLoadedRef = useRef(false);
   const setStage = (msg: string) => {
     renderStageRef.current = msg;
     setBusy(msg);
@@ -93,8 +96,14 @@ export default function EditorPage() {
     for (const f of Array.from(files)) {
       setBusy(`Adding ${f.name}…`);
       try {
+        const duration = await probeDuration(f);
+        const check = checkClipLimits(f, duration);
+        if (!check.ok) {
+          setError(check.reason!);
+          continue;
+        }
         const id = uuid();
-        const [duration, thumbnail] = await Promise.all([probeDuration(f), makeThumbnail(f)]);
+        const thumbnail = await makeThumbnail(f);
         await saveVideo(id, f, f.name);
         const clip: UserClip = { id, name: f.name, duration, thumbnail };
         await saveClipMeta(clip);
@@ -193,9 +202,19 @@ export default function EditorPage() {
   async function handleRender() {
     if (!plan) return;
     setError(null);
-    setStage("Rendering…");
     setRenderPct(0);
     try {
+      // First render ever on this device downloads the ~31MB WASM engine
+      // (instant on repeat visits — the service worker caches it). Load it
+      // explicitly up front so the wait has an honest label instead of
+      // looking like the render itself is just slow.
+      if (!ffmpegLoadedRef.current) {
+        setStage("Loading video engine — first time only (~31MB, Wi-Fi recommended)…");
+        await getFFmpeg();
+        ffmpegLoadedRef.current = true;
+      }
+      setStage("Rendering…");
+
       const blobs = new Map<string, Blob>();
       for (const seg of plan.segments) {
         if (!blobs.has(seg.clipId)) {
@@ -345,6 +364,7 @@ export default function EditorPage() {
       router.push("/export");
     } catch (e) {
       const stage = renderStageRef.current;
+      reportError(e, { where: "handleRender", stage, segmentCount: plan?.segments.length });
       setError(
         e instanceof Error
           ? `Render failed${stage ? ` while ${stage}` : ""}: ${e.message}`
@@ -364,7 +384,7 @@ export default function EditorPage() {
             Matching “{blueprint.sourceName}” — {blueprint.transitions.length} transitions, {blueprint.style.pacing} pacing
           </p>
         ) : (
-          <p className="mt-1 text-sm text-neutral-400">No reference loaded — I'll use a classic viral pattern.</p>
+          <p className="mt-1 text-sm text-neutral-400">No reference loaded — I&apos;ll use a classic viral pattern.</p>
         )}
       </header>
 

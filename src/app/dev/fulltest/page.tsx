@@ -7,7 +7,6 @@
 //  4. captions        — burned in via overlay, then read back from a frame
 // Everything runs through the real libs. Visit /dev/fulltest.
 import { useEffect, useState } from "react";
-import { v4 as uuid } from "uuid";
 import { analyzeClip, highlightWindow, flowAt } from "@/lib/clip-analysis";
 import { detectBeats } from "@/lib/beats";
 import { matchTransition } from "@/lib/motion-match";
@@ -168,7 +167,6 @@ export default function FullTest() {
       setPass(false);
       (window as unknown as { fullTest: unknown }).fullTest = { pass: false, error: String(e) };
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

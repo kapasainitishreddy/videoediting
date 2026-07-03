@@ -7,6 +7,8 @@ import { v4 as uuid } from "uuid";
 import { saveVideo, listBlueprints, listFingerprints, saveBlueprint } from "@/lib/storage";
 import { tasteProfile, blueprintFromCode, type Fingerprint } from "@/lib/intelligence";
 import { VIRAL_TEMPLATES } from "@/lib/templates";
+import { probeDuration } from "@/lib/ffmpeg-client";
+import { checkReferenceLimits } from "@/lib/limits";
 import { useProject } from "@/store/project";
 import type { EditBlueprint } from "@/lib/types";
 
@@ -52,6 +54,16 @@ export default function Home() {
       }
       const blob = await res.blob();
       const title = decodeURIComponent(res.headers.get("X-Video-Title") ?? "reel");
+
+      setBusy("Checking length…");
+      const duration = await probeDuration(blob);
+      const check = checkReferenceLimits(duration);
+      if (!check.ok) {
+        setError(check.reason!);
+        setBusy(null);
+        return;
+      }
+
       const id = uuid();
       await saveVideo(id, blob, title);
       router.push(`/analyze?video=${id}&name=${encodeURIComponent(title)}&url=${encodeURIComponent(url)}`);
@@ -62,11 +74,24 @@ export default function Home() {
   }
 
   async function handleFile(f: File) {
-    setBusy("Saving video…");
+    setBusy("Checking length…");
     setError(null);
-    const id = uuid();
-    await saveVideo(id, f, f.name);
-    router.push(`/analyze?video=${id}&name=${encodeURIComponent(f.name)}`);
+    try {
+      const duration = await probeDuration(f);
+      const check = checkReferenceLimits(duration);
+      if (!check.ok) {
+        setError(check.reason!);
+        setBusy(null);
+        return;
+      }
+      setBusy("Saving video…");
+      const id = uuid();
+      await saveVideo(id, f, f.name);
+      router.push(`/analyze?video=${id}&name=${encodeURIComponent(f.name)}`);
+    } catch {
+      setError("Couldn't read that video file.");
+      setBusy(null);
+    }
   }
 
   return (
@@ -104,6 +129,11 @@ export default function Home() {
         </div>
         <p className="mt-2 text-xs text-neutral-500">
           Instagram · TikTok · YouTube · X · Facebook
+        </p>
+        <p className="mt-2 text-[10px] leading-4 text-neutral-600">
+          Only analyze content you have the rights to use — this downloads the
+          video temporarily on our server to detect its edit, then deletes it
+          immediately.
         </p>
       </div>
 
