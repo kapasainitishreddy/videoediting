@@ -82,61 +82,6 @@ const DIRECTION_RULES: { match: RegExp; apply: (p: EditPlan) => void; note: stri
   },
 ];
 
-export function autoEdit(
-  blueprint: EditBlueprint | null,
-  clips: UserClip[],
-  aiDirection: string
-): EditPlan {
-  if (clips.length === 0) throw new Error("Add at least one clip first");
-
-  // Target shot rhythm: from blueprint, else a sane 1.5s default
-  const shotLen = blueprint ? Math.max(0.6, blueprint.style.avgShotLength) : 1.5;
-  const pattern: TransitionType[] = blueprint && blueprint.transitions.length > 0
-    ? blueprint.transitions.map((t) => t.type)
-    : ["hard-cut", "whip-pan", "zoom-in", "flash"];
-
-  // Slice user clips round-robin into segments matching the pattern length
-  const segments: TimelineSegment[] = [];
-  const targetCount = Math.max(clips.length, Math.min(pattern.length + 1, clips.length * 3));
-  for (let i = 0; i < targetCount; i++) {
-    const clip = clips[i % clips.length];
-    const maxStart = Math.max(0, clip.duration - shotLen);
-    // stagger trim windows across reuses of the same clip
-    const reuse = Math.floor(i / clips.length);
-    const start = Math.min(maxStart, reuse * shotLen * 1.2);
-    segments.push({
-      id: uuid(),
-      clipId: clip.id,
-      start: Number(start.toFixed(2)),
-      end: Number(Math.min(clip.duration, start + shotLen).toFixed(2)),
-      transitionAfter: i < targetCount - 1 ? pattern[i % pattern.length] : null,
-      speed: 1,
-    });
-  }
-
-  const plan: EditPlan = {
-    segments,
-    colorGrade: blueprint?.style.colorGrade ?? "none",
-    aiDirection,
-    explanation: blueprint
-      ? `Matched your ${clips.length} clip${clips.length > 1 ? "s" : ""} to the reference: ${segments.length} shots at ~${shotLen.toFixed(1)}s each, using its ${pattern.length}-transition pattern.`
-      : `Built a ${segments.length}-shot edit with a classic viral pattern.`,
-  };
-
-  // Apply plain-English direction
-  const applied: string[] = [];
-  for (const rule of DIRECTION_RULES) {
-    if (rule.match.test(aiDirection)) {
-      rule.apply(plan);
-      applied.push(rule.note);
-    }
-  }
-  if (applied.length > 0) {
-    plan.explanation += ` Your direction: ${applied.join("; ")}.`;
-  }
-  return plan;
-}
-
 // ---------------------------------------------------------------------------
 // Smart Auto-Edit — the real thing. Analyzes each clip to cut on its
 // highlight moment, snaps shot boundaries to the music's real beats, and

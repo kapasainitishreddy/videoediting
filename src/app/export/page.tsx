@@ -2,26 +2,75 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, Pencil, RotateCcw, Share2 } from "lucide-react";
+import { AlertTriangle, Download, Pencil, RotateCcw, Share2 } from "lucide-react";
 import { useProject } from "@/store/project";
+import { getRenderedVideo } from "@/lib/storage";
 
 export default function ExportPage() {
   const router = useRouter();
-  const { renderedUrl } = useProject();
+  const { renderedUrl, setRenderedUrl } = useProject();
   const [shared, setShared] = useState(false);
+  // null = still checking, "missing" = confirmed gone, "ready" = playable
+  const [status, setStatus] = useState<"checking" | "missing" | "ready">("checking");
 
   useEffect(() => {
-    if (!renderedUrl) router.replace("/editor");
-  }, [renderedUrl, router]);
+    if (renderedUrl) {
+      setStatus("ready");
+      return;
+    }
+    // The store's renderedUrl (a blob: URL) always dies on reload — that's
+    // expected, not an error. Before giving up, check IndexedDB for the
+    // actual render bytes the editor saved and rebuild a fresh URL.
+    let cancelled = false;
+    (async () => {
+      const blob = await getRenderedVideo();
+      if (cancelled) return;
+      if (blob) {
+        setRenderedUrl(URL.createObjectURL(blob));
+        setStatus("ready");
+      } else {
+        setStatus("missing");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [renderedUrl, setRenderedUrl]);
 
-  if (!renderedUrl) return null;
+  if (status === "checking") {
+    return (
+      <main className="flex flex-1 flex-col items-center justify-center px-8">
+        <div className="pulse-soft text-sm text-neutral-500">Looking for your render…</div>
+      </main>
+    );
+  }
+
+  if (status === "missing") {
+    return (
+      <main className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
+        <AlertTriangle className="text-accent" size={32} />
+        <div>
+          <h1 className="text-lg font-bold">No render to show</h1>
+          <p className="mt-1 text-sm text-neutral-400">
+            Nothing has been rendered in this session yet — or your browser cleared its storage.
+          </p>
+        </div>
+        <button
+          onClick={() => router.push("/editor")}
+          className="btn-primary flex items-center gap-2 px-6 py-3"
+        >
+          <Pencil size={16} /> Go build an edit
+        </button>
+      </main>
+    );
+  }
 
   async function handleShare() {
     try {
       const blob = await fetch(renderedUrl!).then((r) => r.blob());
       const file = new File([blob], "viraledit.mp4", { type: "video/mp4" });
       if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: "My ViralEdit" });
+        await navigator.share({ files: [file], title: "My ViralEdit AI edit" });
         setShared(true);
       } else {
         handleDownload();
@@ -48,7 +97,7 @@ export default function ExportPage() {
 
       <div className="mx-auto w-[70%]">
         <video
-          src={renderedUrl}
+          src={renderedUrl!}
           controls
           playsInline
           loop

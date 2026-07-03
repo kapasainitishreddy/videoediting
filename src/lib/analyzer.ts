@@ -1,66 +1,16 @@
 "use client";
 
-// Turns raw cut-detection samples into a full EditBlueprint.
-// Works 100% locally with no API key; when a MiniMax key is added the
-// /api/analyze route enriches the same data with smarter labels.
-import type {
-  DetectedTransition,
-  EditBlueprint,
-  BeatInfo,
-  StyleProfile,
-  GuideStep,
-  TransitionType,
-} from "./types";
+// Turns detected transitions (from src/lib/detect.ts) into a full
+// EditBlueprint: beat estimate, style profile, and a recreation guide.
+// Works 100% locally with no API key; when a provider key is added,
+// /api/ai polishes descriptions on top of this deterministic base.
+import type { DetectedTransition, EditBlueprint, BeatInfo, StyleProfile, GuideStep, TransitionType } from "./types";
 import { transitionByType } from "./transitions";
 
 interface Sample {
   time: number;
   delta: number;
   brightness: number;
-}
-
-export function buildTransitions(samples: Sample[]): DetectedTransition[] {
-  if (samples.length < 3) return [];
-  const deltas = samples.map((s) => s.delta).sort((a, b) => a - b);
-  const median = deltas[Math.floor(deltas.length / 2)];
-  const threshold = Math.max(0.12, median * 3.5);
-
-  const transitions: DetectedTransition[] = [];
-  let lastCut = -1;
-
-  for (let i = 1; i < samples.length - 1; i++) {
-    const s = samples[i];
-    if (s.delta < threshold) continue;
-    if (s.time - lastCut < 0.3) continue; // debounce
-    lastCut = s.time;
-
-    const prevB = samples[i - 1].brightness;
-    const nextB = samples[i + 1]?.brightness ?? prevB;
-
-    let type: TransitionType = "hard-cut";
-    let description = "Hard cut";
-    // flash: brightness spikes way up at the cut
-    if (s.brightness > 0.82 && prevB < 0.6) {
-      type = "flash";
-      description = "White flash cut — brightness spikes to full for 2-4 frames";
-    } else if (s.delta > threshold * 2.2) {
-      type = "whip-pan";
-      description = "Very high motion across the cut — likely a whip pan or camera whip";
-    } else if (Math.abs(nextB - prevB) < 0.08 && s.delta < threshold * 1.4) {
-      type = "fade";
-      description = "Gradual blend — soft dissolve between shots";
-    }
-
-    transitions.push({
-      id: `t_${transitions.length}`,
-      time: Number(s.time.toFixed(2)),
-      type,
-      confidence: Math.min(0.95, 0.5 + s.delta),
-      durationFrames: type === "hard-cut" ? 1 : Math.round((type === "fade" ? 0.5 : 0.25) * 30),
-      description,
-    });
-  }
-  return transitions;
 }
 
 // Estimate pacing/energy from cut density; estimate BPM from cut intervals
@@ -174,29 +124,6 @@ export function assembleBlueprintV2(args: {
     sourceUrl: args.sourceUrl,
     duration: args.duration,
     transitions: args.transitions,
-    beats,
-    style,
-    createdAt: Date.now(),
-  };
-  return { ...partial, guide: buildGuide(partial) };
-}
-
-export function assembleBlueprint(args: {
-  id: string;
-  sourceName: string;
-  sourceUrl?: string;
-  duration: number;
-  samples: Sample[];
-}): EditBlueprint {
-  const transitions = buildTransitions(args.samples);
-  const beats = estimateBeats(transitions, args.duration);
-  const style = buildStyle(args.samples, transitions, args.duration);
-  const partial = {
-    id: args.id,
-    sourceName: args.sourceName,
-    sourceUrl: args.sourceUrl,
-    duration: args.duration,
-    transitions,
     beats,
     style,
     createdAt: Date.now(),

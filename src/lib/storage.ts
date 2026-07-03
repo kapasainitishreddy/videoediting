@@ -117,3 +117,26 @@ export async function listFingerprints(): Promise<Fingerprint[]> {
   const all: Fingerprint[] = await db.getAll("fingerprints");
   return all.sort((a, b) => b.createdAt - a.createdAt);
 }
+
+// --- the last finished render ---
+// A rendered video is real bytes, so it belongs in IndexedDB, not the
+// sessionStorage-backed Zustand store (which only holds small JSON). This
+// is what makes /export survive a reload: the store's renderedUrl (a
+// blob: URL) always dies with the page, but these bytes don't.
+const RENDERED_KEY = "last";
+
+export async function saveRenderedVideo(blob: Blob) {
+  const db = await getDB();
+  await db.put("videos", { id: `rendered:${RENDERED_KEY}`, blob, name: "rendered.mp4", createdAt: Date.now() });
+}
+
+export async function getRenderedVideo(): Promise<Blob | undefined> {
+  const db = await getDB();
+  const row = await db.get("videos", `rendered:${RENDERED_KEY}`);
+  return row?.blob;
+}
+
+export async function clearRenderedVideo() {
+  const db = await getDB();
+  await db.delete("videos", `rendered:${RENDERED_KEY}`);
+}

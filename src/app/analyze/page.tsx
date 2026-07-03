@@ -163,7 +163,7 @@ function AnalyzeInner() {
             />
           ))}
         </div>
-        <div className="mt-1 flex justify-between text-[10px] text-neutral-600">
+        <div className="mt-1 flex justify-between text-[10px] text-neutral-500">
           <span>0:00</span>
           <span>{Math.floor(bp.duration / 60)}:{String(Math.round(bp.duration % 60)).padStart(2, "0")}</span>
         </div>
@@ -171,6 +171,16 @@ function AnalyzeInner() {
 
       {/* Transitions found */}
       <section className="mt-4 flex flex-col gap-2">
+        {bp.transitions.length === 0 && (
+          <div className="card px-4 py-5 text-center">
+            <p className="text-sm font-semibold">No hard cuts detected</p>
+            <p className="mt-1 text-xs leading-5 text-neutral-500">
+              This looks like one continuous shot — a single steady take rather than a multi-clip edit. Nothing to
+              recreate here except the camera work itself. Try a different reel, or head straight to the editor
+              to build something from scratch.
+            </p>
+          </div>
+        )}
         {bp.transitions.slice(0, 12).map((t) => {
           const r = transitionByType(t.type);
           return (
@@ -186,7 +196,7 @@ function AnalyzeInner() {
           );
         })}
         {bp.transitions.length > 12 && (
-          <p className="text-center text-xs text-neutral-600">+{bp.transitions.length - 12} more</p>
+          <p className="text-center text-xs text-neutral-500">+{bp.transitions.length - 12} more</p>
         )}
       </section>
 

@@ -102,7 +102,7 @@ export default function Home() {
             Go
           </button>
         </div>
-        <p className="mt-2 text-xs text-neutral-600">
+        <p className="mt-2 text-xs text-neutral-500">
           Instagram · TikTok · YouTube · X · Facebook
         </p>
       </div>
@@ -203,7 +203,7 @@ export default function Home() {
             {tasteProfile(prints).map((n, i) => (
               <p key={i} className="py-0.5 text-xs leading-5 text-neutral-300">{n}</p>
             ))}
-            <p className="mt-1 text-[10px] text-neutral-600">Built from {prints.length} saved reel{prints.length > 1 ? "s" : ""} — save more styles from the analysis screen.</p>
+            <p className="mt-1 text-[10px] text-neutral-500">Built from {prints.length} saved reel{prints.length > 1 ? "s" : ""} — save more styles from the analysis screen.</p>
           </div>
         </section>
       )}
@@ -224,7 +224,7 @@ export default function Home() {
             Load
           </button>
         </div>
-        <p className="mt-1 text-[10px] text-neutral-600">A friend&apos;s cut recipe — timings and transitions only, no video.</p>
+        <p className="mt-1 text-[10px] text-neutral-500">A friend&apos;s cut recipe — timings and transitions only, no video.</p>
       </section>
 
       <div className="mt-4">

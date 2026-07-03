@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Captions, Mic, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
-import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan } from "@/lib/storage";
+import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
 import { smartAutoEdit } from "@/lib/auto-edit";
 import { detectBeats, type BeatResult } from "@/lib/beats";
@@ -48,6 +48,14 @@ export default function EditorPage() {
   const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
   const [listening, setListening] = useState(false);
   const [tasteNotes, setTasteNotes] = useState<string[]>([]);
+  // Tracks the last render stage so a mid-pipeline failure tells the user
+  // WHICH step broke (captions vs color match vs mux) instead of a bare
+  // "render failed" that gives no clue what to retry or report.
+  const renderStageRef = useRef<string | null>(null);
+  const setStage = (msg: string) => {
+    renderStageRef.current = msg;
+    setBusy(msg);
+  };
 
   // #8 uniqueness: voice-directed editing via the Web Speech API
   function handleVoiceDirection() {
@@ -67,7 +75,12 @@ export default function EditorPage() {
     rec.start();
   }
 
-  // Restore clips saved in IndexedDB on reload
+  // `plan`, `blueprint`, and `studio` survive a reload automatically via
+  // the store's sessionStorage persistence (store/project.ts). This is a
+  // fallback ONLY for `clips`: if sessionStorage was cleared (private
+  // browsing, manual clear) but the actual video files are still in
+  // IndexedDB, recover the clip list from there so footage isn't
+  // orphaned with no way to reference it.
   useEffect(() => {
     if (clips.length === 0) {
       listClipMetas().then((metas) => metas.length && setClips(metas)).catch(() => {});
@@ -180,7 +193,7 @@ export default function EditorPage() {
   async function handleRender() {
     if (!plan) return;
     setError(null);
-    setBusy("Rendering…");
+    setStage("Rendering…");
     setRenderPct(0);
     try {
       const blobs = new Map<string, Blob>();
@@ -205,7 +218,7 @@ export default function EditorPage() {
       const burnCaptions: BurnCaption[] = [];
       const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
       if (lines.length > 0) {
-        setBusy("Styling captions…");
+        setStage("Styling captions…");
         const cues = layoutCaptions(lines, outDur, beats?.beatTimes);
         for (const cue of cues) {
           if (studio2.kineticCaptions) {
@@ -218,7 +231,7 @@ export default function EditorPage() {
 
       // Title card over the first ~2.2s, credits over the tail.
       if (studio2.titleCard?.title) {
-        setBusy("Rendering title card…");
+        setStage("Rendering title card…");
         burnCaptions.push({
           png: await renderTitleCard(studio2.titleCard),
           start: 0,
@@ -227,7 +240,7 @@ export default function EditorPage() {
       }
       const creditLines = studio2.credits.split("\n").map((l) => l.trim()).filter(Boolean);
       if (creditLines.length > 0) {
-        setBusy("Rolling credits…");
+        setStage("Rolling credits…");
         const pages = await renderCreditsPages(creditLines);
         let t = Math.max(0, outDur - pages.length * 2.2);
         for (const p of pages) {
@@ -239,7 +252,7 @@ export default function EditorPage() {
       // Per-clip auto color/exposure normalize (#5/#46)
       const normalizeByClip = new Map<string, string>();
       if (studio2.look.autoNormalize) {
-        setBusy("Matching color across clips…");
+        setStage("Matching color across clips…");
         const stats = new Map<string, Awaited<ReturnType<typeof measureColor>>>();
         for (const [id, blob] of blobs) stats.set(id, await measureColor(blob));
         const target = [...stats.values()].reduce((s, x) => s + x.luma, 0) / Math.max(1, stats.size);
@@ -252,7 +265,7 @@ export default function EditorPage() {
       // Subject-aware reframe (#11)
       const reframeByClip = new Map<string, string>();
       if (studio2.autoReframe) {
-        setBusy("Finding your subject…");
+        setStage("Finding your subject…");
         for (const [id, blob] of blobs) {
           reframeByClip.set(id, reframeFilter(await motionCentroidX(blob)));
         }
@@ -261,7 +274,7 @@ export default function EditorPage() {
       // Auto Ken Burns on static shots (#6)
       const motionBySegment = new Map<string, import("@/lib/motion").MotionEffect>();
       if (studio2.autoKenBurns) {
-        setBusy("Adding virtual camera moves…");
+        setStage("Adding virtual camera moves…");
         const analyses = new Map<string, ClipAnalysis>();
         for (const [id, blob] of blobs) analyses.set(id, await analyzeClip(blob, { samplesPerSecond: 5, maxSamples: 60 }));
         plan2.segments.forEach((seg, i) => {
@@ -275,7 +288,7 @@ export default function EditorPage() {
       // Atmosphere overlay clip (#17/#19/#39)
       let overlay: RenderOptions["overlay"];
       if (studio2.overlay) {
-        setBusy(`Generating ${studio2.overlay} layer…`);
+        setStage(`Generating ${studio2.overlay} layer…`);
         overlay = { blob: await generateOverlayClip(studio2.overlay, outDur + 1), opacity: studio2.overlayOpacity };
       }
 
@@ -301,11 +314,11 @@ export default function EditorPage() {
         setTasteNotes([...taste.report.changes]);
       }
       if (!finalAudio && studio2.scoreMood) {
-        setBusy("Composing your score…");
+        setStage("Composing your score…");
         finalAudio = await composeScore({ bpm: beats?.bpm ?? blueprint?.beats?.bpm ?? 100, seconds: outDur + 0.5, mood: studio2.scoreMood });
       }
       if (finalAudio || sfxAt.length > 0) {
-        setBusy("Mixing audio…");
+        setStage("Mixing audio…");
         finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt });
       }
 
@@ -321,14 +334,22 @@ export default function EditorPage() {
         overlay,
         onProgress: (pct, msg) => {
           setRenderPct(pct);
-          setBusy(msg);
+          setStage(msg);
         },
       });
+      // Save the actual bytes to IndexedDB so /export survives a reload —
+      // the blob: URL below only lives as long as this tab stays open.
+      await saveRenderedVideo(out);
       const url = URL.createObjectURL(out);
       setRenderedUrl(url);
       router.push("/export");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Render failed — try shorter clips");
+      const stage = renderStageRef.current;
+      setError(
+        e instanceof Error
+          ? `Render failed${stage ? ` while ${stage}` : ""}: ${e.message}`
+          : `Render failed${stage ? ` while ${stage}` : ""} — try shorter clips`
+      );
       setBusy(null);
     }
   }
@@ -360,7 +381,7 @@ export default function EditorPage() {
               )}
               <button
                 onClick={() => handleRemoveClip(c.id)}
-                className="absolute -right-1.5 -top-1.5 rounded-full bg-neutral-800 p-1"
+                className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800"
                 aria-label={`Remove ${c.name}`}
               >
                 <X size={12} />
@@ -447,7 +468,11 @@ export default function EditorPage() {
                   <div className="relative">
                     {clip?.thumbnail ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={clip.thumbnail} alt="" className="h-16 w-12 rounded-lg object-cover" />
+                      <img
+                        src={clip.thumbnail}
+                        alt={`Shot ${i + 1}: ${clip.name}, ${(seg.end - seg.start).toFixed(1)}s`}
+                        className="h-16 w-12 rounded-lg object-cover"
+                      />
                     ) : (
                       <div className="stripes h-16 w-12 rounded-lg" />
                     )}
@@ -458,8 +483,8 @@ export default function EditorPage() {
                   {seg.transitionAfter !== null && (
                     <button
                       onClick={() => setPickerFor(i)}
-                      className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border bg-card text-base active:border-accent"
-                      aria-label="Change transition"
+                      className="flex h-11 w-11 items-center justify-center rounded-full border border-card-border bg-card text-base active:border-accent"
+                      aria-label={`Change transition after shot ${i + 1}, currently ${transitionByType(seg.transitionAfter).label}`}
                     >
                       {transitionByType(seg.transitionAfter).emoji}
                     </button>
@@ -503,7 +528,7 @@ export default function EditorPage() {
           {/* Captions */}
           <div className="mt-3">
             <label className="flex items-center gap-1.5 text-xs font-semibold text-neutral-500">
-              <Captions size={13} /> Captions <span className="text-neutral-600">— one line per caption</span>
+              <Captions size={13} /> Captions <span className="text-neutral-500">— one line per caption</span>
             </label>
             <textarea
               value={captionText}
@@ -527,7 +552,7 @@ export default function EditorPage() {
                 ))}
               </div>
             )}
-            <p className="mt-1 text-[10px] text-neutral-600">
+            <p className="mt-1 text-[10px] text-neutral-500">
               {beats ? "Timed to your music's beats." : "Spread evenly across the edit. Add music to time them to the beat."}
             </p>
           </div>

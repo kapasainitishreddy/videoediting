@@ -133,58 +133,6 @@ export function makeThumbnail(blob: Blob, at = 0.5): Promise<string> {
   });
 }
 
-// Detect cuts client-side by comparing downscaled frame histograms.
-// This is the no-API-key fallback analyzer and it genuinely works:
-// hard cuts and flashes show up as large inter-frame differences.
-export async function detectCutsHeuristic(
-  video: Blob,
-  onProgress?: (pct: number, msg: string) => void
-): Promise<{ time: number; delta: number; brightness: number }[]> {
-  const duration = await probeDuration(video);
-  const url = URL.createObjectURL(video);
-  const v = document.createElement("video");
-  v.preload = "auto";
-  v.muted = true;
-  v.src = url;
-  await new Promise<void>((res, rej) => {
-    v.onloadeddata = () => res();
-    v.onerror = () => rej(new Error("video load failed"));
-  });
-
-  const W = 64, H = 64;
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-
-  const step = Math.max(0.1, Math.min(0.2, duration / 150)); // ~5-10 samples/sec
-  let prev: Uint8ClampedArray | null = null;
-  const results: { time: number; delta: number; brightness: number }[] = [];
-
-  for (let t = 0; t < duration; t += step) {
-    await new Promise<void>((res) => {
-      v.onseeked = () => res();
-      v.currentTime = t;
-    });
-    ctx.drawImage(v, 0, 0, W, H);
-    const { data } = ctx.getImageData(0, 0, W, H);
-    let brightness = 0;
-    for (let i = 0; i < data.length; i += 4) brightness += data[i] + data[i + 1] + data[i + 2];
-    brightness /= (data.length / 4) * 3 * 255;
-
-    if (prev) {
-      let delta = 0;
-      for (let i = 0; i < data.length; i += 16) delta += Math.abs(data[i] - prev[i]);
-      delta /= data.length / 16;
-      results.push({ time: t, delta: delta / 255, brightness });
-    }
-    prev = data.slice();
-    onProgress?.(Math.round((t / duration) * 100), `Scanning ${t.toFixed(1)}s / ${duration.toFixed(1)}s`);
-  }
-  URL.revokeObjectURL(url);
-  return results;
-}
-
 // Render the final edit: trim each segment, apply speed + color grade,
 // then chain xfade transitions between consecutive segments.
 export interface BurnCaption {
