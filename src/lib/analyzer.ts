@@ -156,6 +156,31 @@ export function buildGuide(bp: Omit<EditBlueprint, "guide">): GuideStep[] {
   return steps;
 }
 
+// Build a blueprint from detection v2 output (preferred path): transitions
+// come from the evidence-based detector; beats/style/guide as before.
+export function assembleBlueprintV2(args: {
+  id: string;
+  sourceName: string;
+  sourceUrl?: string;
+  duration: number;
+  transitions: import("./types").DetectedTransition[];
+  samples: Sample[];
+}): EditBlueprint {
+  const beats = estimateBeats(args.transitions, args.duration);
+  const style = buildStyle(args.samples, args.transitions, args.duration);
+  const partial = {
+    id: args.id,
+    sourceName: args.sourceName,
+    sourceUrl: args.sourceUrl,
+    duration: args.duration,
+    transitions: args.transitions,
+    beats,
+    style,
+    createdAt: Date.now(),
+  };
+  return { ...partial, guide: buildGuide(partial) };
+}
+
 export function assembleBlueprint(args: {
   id: string;
   sourceName: string;

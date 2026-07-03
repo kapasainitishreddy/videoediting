@@ -5,9 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, Music, Palette, Scissors, ListChecks, RotateCcw, Activity, Camera, Heart, Send } from "lucide-react";
 import { getVideo, getBlueprint, saveBlueprint, saveFingerprint } from "@/lib/storage";
 import { paceAnalysis, shotList, fingerprintOf, migrateFormat } from "@/lib/intelligence";
-import { detectCutsHeuristic } from "@/lib/ffmpeg-client";
-import { probeDuration } from "@/lib/ffmpeg-client";
-import { assembleBlueprint } from "@/lib/analyzer";
+import { detectTransitionsV2 } from "@/lib/detect";
+import { assembleBlueprintV2 } from "@/lib/analyzer";
 import { transitionByType } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { EditBlueprint } from "@/lib/types";
@@ -48,20 +47,19 @@ function AnalyzeInner() {
         const stored = await getVideo(videoId);
         if (!stored) throw new Error("Video not found in local storage");
 
-        setProgress({ pct: 5, msg: "Reading video…" });
-        const duration = await probeDuration(stored.blob);
-
-        const samples = await detectCutsHeuristic(stored.blob, (pct, msg) =>
-          setProgress({ pct: 5 + Math.round(pct * 0.85), msg })
+        setProgress({ pct: 3, msg: "Reading video…" });
+        const detection = await detectTransitionsV2(stored.blob, (pct, msg) =>
+          setProgress({ pct: 3 + Math.round(pct * 0.89), msg })
         );
 
-        setProgress({ pct: 92, msg: "Building your blueprint…" });
-        const blueprint = assembleBlueprint({
+        setProgress({ pct: 94, msg: "Building your blueprint…" });
+        const blueprint = assembleBlueprintV2({
           id: videoId,
           sourceName: name,
           sourceUrl,
-          duration,
-          samples,
+          duration: detection.duration,
+          transitions: detection.transitions,
+          samples: detection.samples,
         });
 
         // Optional AI enrichment — same normalized shape regardless of
@@ -72,7 +70,18 @@ function AnalyzeInner() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               task: "label-transitions",
-              payload: { samples: samples.filter((s) => s.delta > 0.1).slice(0, 60), duration },
+              payload: {
+                // v2 evidence: the model gets our confident local labels and
+                // only refines wording/borderline types — a weak model can't
+                // drag quality down below the deterministic floor.
+                detected: blueprint.transitions.map((t) => ({
+                  time: t.time,
+                  type: t.type,
+                  confidence: t.confidence,
+                  evidence: t.description,
+                })),
+                duration: detection.duration,
+              },
             }),
           });
           const j = await res.json();
