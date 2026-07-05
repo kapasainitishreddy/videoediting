@@ -3,12 +3,17 @@
 // Cinematic Studio — the control surface for looks, motion, atmosphere,
 // score, and titles. Compact chip/toggle UI; all state lives in the store
 // and flows into renderEdit.
-import { useState } from "react";
-import { Clapperboard, ChevronDown, Film, Move3d, CloudFog, Music2, Type, Wand2 } from "lucide-react";
+//
+// Two tiers: Simple (default) shows the ~10 controls a beginner actually
+// needs; Pro reveals film stocks, the full optics toggle list, brand colors,
+// and Studio share codes. The tier choice sticks via localStorage.
+import { useState, useSyncExternalStore } from "react";
+import { Clapperboard, Check, ChevronDown, Copy, Film, Move3d, CloudFog, Music2, Type, Wand2 } from "lucide-react";
 import { useProject } from "@/store/project";
 import { COLOR_GRADES } from "@/lib/transitions";
 import { FILM_STOCKS, GENRE_LOOKS, cinematicify, DEFAULT_LOOK } from "@/lib/cinematic";
 import { OVERLAY_LABELS, type OverlayType } from "@/lib/overlays";
+import { studioToCode, studioFromCode } from "@/lib/creator-kit";
 import type { MotionEffect } from "@/lib/motion";
 import type { ScoreMood } from "@/lib/audio-cinema";
 
@@ -52,6 +57,22 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
+// Simple/Pro tier flag, persisted in localStorage. useSyncExternalStore keeps
+// the read outside render effects (SSR sees the server snapshot = false, the
+// client subscribes to changes) — no setState-in-effect, no hydration flash
+// beyond the first paint.
+const proListeners = new Set<() => void>();
+const subscribePro = (cb: () => void) => {
+  proListeners.delete(cb);
+  proListeners.add(cb);
+  return () => proListeners.delete(cb);
+};
+const readPro = () => localStorage.getItem("viraledit-studio-pro") === "1";
+const writePro = (v: boolean) => {
+  localStorage.setItem("viraledit-studio-pro", v ? "1" : "0");
+  proListeners.forEach((cb) => cb());
+};
+
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button onClick={() => onChange(!value)} className="flex w-full items-center justify-between py-1.5 text-xs text-neutral-300">
@@ -67,6 +88,61 @@ export default function StudioPanel() {
   const { studio, setStudio } = useProject();
   const look = studio.look;
   const setLook = (patch: Partial<typeof look>) => setStudio({ look: { ...look, ...patch } });
+  const pro = useSyncExternalStore(subscribePro, readPro, () => false);
+  const [copied, setCopied] = useState(false);
+  const [importCode, setImportCode] = useState("");
+  const [importNote, setImportNote] = useState<string | null>(null);
+
+  const togglePro = () => writePro(!pro);
+
+  async function copyStudioCode() {
+    const code = studioToCode({
+      grade: look.grade,
+      letterbox: look.letterbox,
+      grain: look.grain,
+      vignette: look.vignette,
+      halation: look.halation,
+      goldenHour: look.goldenHour,
+      dayForNight: look.dayForNight,
+      anamorphic: look.anamorphic,
+      haze: look.haze,
+      sharpen: look.sharpen,
+      scoreMood: studio.scoreMood,
+      autoSfx: studio.autoSfx,
+      autoKenBurns: studio.autoKenBurns,
+      autoReframe: studio.autoReframe,
+      kineticCaptions: studio.kineticCaptions,
+      overlay: studio.overlay,
+      overlayOpacity: studio.overlayOpacity,
+      motion: studio.motionDefault,
+    });
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  function importStudioCode() {
+    const patch = studioFromCode(importCode.trim());
+    if (!patch) {
+      setImportNote("That doesn't look like a valid VES1 studio code.");
+      return;
+    }
+    const s = patch.studio ?? { look: {} };
+    setStudio({
+      ...(s.scoreMood !== undefined ? { scoreMood: s.scoreMood } : {}),
+      ...(s.autoSfx !== undefined ? { autoSfx: s.autoSfx } : {}),
+      ...(s.autoKenBurns !== undefined ? { autoKenBurns: s.autoKenBurns } : {}),
+      ...(s.autoReframe !== undefined ? { autoReframe: s.autoReframe } : {}),
+      ...(s.kineticCaptions !== undefined ? { kineticCaptions: s.kineticCaptions } : {}),
+      ...(s.overlay !== undefined ? { overlay: s.overlay } : {}),
+      ...(s.overlayOpacity !== undefined ? { overlayOpacity: s.overlayOpacity } : {}),
+      ...(s.motionDefault !== undefined ? { motionDefault: s.motionDefault } : {}),
+      look: { ...look, ...s.look },
+    });
+    setImportCode("");
+    setImportNote("Studio setup imported ✓");
+    setTimeout(() => setImportNote(null), 2000);
+  }
 
   return (
     <section className="card mt-5 px-4 py-1">
@@ -74,12 +150,20 @@ export default function StudioPanel() {
         <span className="flex items-center gap-2 text-sm font-bold">
           <Clapperboard size={15} className="text-accent" /> Cinematic Studio
         </span>
-        <button
-          onClick={() => setStudio({ look: cinematicify() })}
-          className="flex items-center gap-1 rounded-full bg-accent/15 px-3 py-1.5 text-xs font-semibold text-accent"
-        >
-          <Wand2 size={12} /> Cinematic-ify
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={togglePro}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${pro ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
+          >
+            {pro ? "Pro" : "Simple"}
+          </button>
+          <button
+            onClick={() => setStudio({ look: cinematicify() })}
+            className="flex items-center gap-1 rounded-full bg-accent/15 px-3 py-1.5 text-xs font-semibold text-accent"
+          >
+            <Wand2 size={12} /> Cinematic-ify
+          </button>
+        </div>
       </div>
 
       <Section icon={<Film size={14} className="text-accent" />} title="Look & Grade">
@@ -89,12 +173,16 @@ export default function StudioPanel() {
             <Chip key={k} active={look.grade === k} onClick={() => setLook({ grade: k, ...g.pairs })}>{g.label}</Chip>
           ))}
         </div>
-        <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wider text-neutral-600">Film stocks</p>
-        <div className="flex flex-wrap gap-1.5">
-          {Object.entries(FILM_STOCKS).map(([k, s]) => (
-            <Chip key={k} active={look.grade === k} onClick={() => setLook({ grade: k })}>{s.label}</Chip>
-          ))}
-        </div>
+        {pro && (
+          <>
+            <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wider text-neutral-600">Film stocks</p>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(FILM_STOCKS).map(([k, s]) => (
+                <Chip key={k} active={look.grade === k} onClick={() => setLook({ grade: k })}>{s.label}</Chip>
+              ))}
+            </div>
+          </>
+        )}
         <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wider text-neutral-600">Simple grades</p>
         <div className="flex flex-wrap gap-1.5">
           {Object.entries(COLOR_GRADES).map(([k, g]) => (
@@ -105,19 +193,41 @@ export default function StudioPanel() {
           <Toggle label="Cinema letterbox bars" value={look.letterbox} onChange={(v) => setLook({ letterbox: v })} />
           <Toggle label="Film grain" value={look.grain > 0} onChange={(v) => setLook({ grain: v ? 0.3 : 0 })} />
           <Toggle label="Vignette" value={look.vignette > 0} onChange={(v) => setLook({ vignette: v ? 0.45 : 0 })} />
-          <Toggle label="Halation bloom" value={look.halation} onChange={(v) => setLook({ halation: v })} />
-          <Toggle label="Anamorphic lens" value={look.anamorphic} onChange={(v) => setLook({ anamorphic: v })} />
-          <Toggle label="Chromatic aberration" value={look.chromaticAberration} onChange={(v) => setLook({ chromaticAberration: v })} />
-          <Toggle label="Golden hour warmth" value={look.goldenHour} onChange={(v) => setLook({ goldenHour: v })} />
-          <Toggle label="Day-for-night" value={look.dayForNight} onChange={(v) => setLook({ dayForNight: v })} />
-          <Toggle label="Atmospheric haze" value={look.haze} onChange={(v) => setLook({ haze: v })} />
-          <Toggle label="Denoise footage" value={look.denoise} onChange={(v) => setLook({ denoise: v })} />
-          <Toggle label="Sharpen" value={look.sharpen} onChange={(v) => setLook({ sharpen: v })} />
-          <Toggle label="Auto color/exposure match" value={look.autoNormalize} onChange={(v) => setLook({ autoNormalize: v })} />
+          {pro && (
+            <>
+              <Toggle label="Halation bloom" value={look.halation} onChange={(v) => setLook({ halation: v })} />
+              <Toggle label="Anamorphic lens" value={look.anamorphic} onChange={(v) => setLook({ anamorphic: v })} />
+              <Toggle label="Chromatic aberration" value={look.chromaticAberration} onChange={(v) => setLook({ chromaticAberration: v })} />
+              <Toggle label="Golden hour warmth" value={look.goldenHour} onChange={(v) => setLook({ goldenHour: v })} />
+              <Toggle label="Day-for-night" value={look.dayForNight} onChange={(v) => setLook({ dayForNight: v })} />
+              <Toggle label="Atmospheric haze" value={look.haze} onChange={(v) => setLook({ haze: v })} />
+              <Toggle label="Denoise footage" value={look.denoise} onChange={(v) => setLook({ denoise: v })} />
+              <Toggle label="Sharpen" value={look.sharpen} onChange={(v) => setLook({ sharpen: v })} />
+              <Toggle label="Auto color/exposure match" value={look.autoNormalize} onChange={(v) => setLook({ autoNormalize: v })} />
+            </>
+          )}
+          {!pro && (
+            <p className="mt-1 text-[10px] text-neutral-600">
+              9 more optics controls in <button onClick={togglePro} className="underline">Pro mode</button> — or just describe the look in the prompt.
+            </p>
+          )}
           <button onClick={() => setStudio({ look: DEFAULT_LOOK })} className="mt-1 text-[10px] text-neutral-600 underline">
             reset look
           </button>
         </div>
+        {pro && (
+          <div className="mt-3 border-t border-card-border pt-3">
+            <label className="block text-xs text-neutral-400">
+              Brand colors — hex codes, footage gets nudged toward them
+              <input
+                value={studio.brandHex ?? ""}
+                onChange={(e) => setStudio({ brandHex: e.target.value })}
+                placeholder="#FF5C35 #0D0D0D"
+                className="mt-1 w-full rounded-lg border border-card-border bg-black px-3 py-2 font-mono text-xs outline-none placeholder:text-neutral-700 focus:border-accent"
+              />
+            </label>
+          </div>
+        )}
       </Section>
 
       <Section icon={<Move3d size={14} className="text-accent" />} title="Camera Motion">
@@ -215,6 +325,35 @@ export default function StudioPanel() {
           />
         </label>
       </Section>
+
+      {pro && (
+        <div className="border-t border-card-border py-3">
+          <p className="mb-2 text-[10px] uppercase tracking-wider text-neutral-600">Share this Studio setup</p>
+          <button
+            onClick={copyStudioCode}
+            className="flex w-full items-center justify-center gap-2 rounded-full border border-card-border py-2.5 text-xs text-neutral-300"
+          >
+            {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+            {copied ? "Copied!" : "Copy my Studio as a VES1 code"}
+          </button>
+          <div className="mt-2 flex gap-2">
+            <input
+              value={importCode}
+              onChange={(e) => setImportCode(e.target.value)}
+              placeholder="VES1.…"
+              className="min-w-0 flex-1 rounded-lg border border-card-border bg-black px-3 py-2 font-mono text-xs outline-none placeholder:text-neutral-700 focus:border-accent"
+            />
+            <button
+              onClick={importStudioCode}
+              disabled={!importCode.trim()}
+              className="rounded-full border border-card-border px-4 text-xs text-neutral-300 disabled:opacity-40"
+            >
+              Import
+            </button>
+          </div>
+          {importNote && <p className="mt-1.5 text-[10px] text-accent">{importNote}</p>}
+        </div>
+      )}
     </section>
   );
 }

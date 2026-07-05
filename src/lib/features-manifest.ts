@@ -117,6 +117,60 @@ export const FEATURES: Feature[] = [
   // ---------- AI generation ----------
   { group: "AI Generation", name: "AI B-roll generation (text → clip)", status: "key", where: "MINIMAX_API_KEY via /api/generate" },
   { group: "AI Generation", name: "Smarter transition labels / edit refinement", status: "key", where: "any of the three provider keys" },
+
+  // ---------- Retention & hooks (v2 drop) ----------
+  { group: "Retention & Hooks", name: "Retention risk heatmap on the timeline", status: "working", where: "Editor → Insights" },
+  { group: "Retention & Hooks", name: "Dead-intro detector with exact trim suggestion", status: "working", where: "Editor → Insights (under the heatmap)" },
+  { group: "Retention & Hooks", name: "Hook A/B variants (tight / swapped / ending-first teaser)", status: "working", where: "Editor → Insights → Try a different hook" },
+  { group: "Retention & Hooks", name: "Callback ending (hook returns at the end)", status: "working", where: "Editor → Insights → loopability" },
+  { group: "Retention & Hooks", name: "Loopability score + tips", status: "working", where: "Editor → Insights" },
+  { group: "Retention & Hooks", name: "Cut-to-length variants (15s / 30s / 60s)", status: "working", where: "Editor → Insights → Cut to length" },
+
+  // ---------- Smart cutting (v2 drop) ----------
+  { group: "Smart Cutting", name: "Highlight-reel distiller for long clips", status: "working", where: "Editor → ⚡ Distill on any clip over 25s" },
+  { group: "Smart Cutting", name: "Auto black-bar strip (baked-in letterbox/pillarbox)", status: "working", where: "automatic at clip upload" },
+  { group: "Smart Cutting", name: "Repeat-take detector", status: "roadmap", where: "needs pairwise clip similarity pass" },
+  { group: "Smart Cutting", name: "Multi-cam sync via audio waveforms", status: "roadmap", where: "needs cross-correlation aligner" },
+  { group: "Smart Cutting", name: "Text-based editing / filler-word remover", status: "key", where: "needs Whisper word timestamps (OPENAI_API_KEY) — planned" },
+
+  // ---------- One-tap pipelines (v2 drop) ----------
+  { group: "One-Tap Pipelines", name: "6 genre presets (Wedding, Travel, Fitness, Food, Gaming, Film Story)", status: "working", where: "Editor → preset chips above the prompt" },
+  { group: "One-Tap Pipelines", name: "Studio share codes (VES1 — trade full setups)", status: "working", where: "Studio → Pro → Share this Studio setup" },
+  { group: "One-Tap Pipelines", name: "Command palette — every tool searchable", status: "working", where: "⌘K / Ctrl-K or the floating search button" },
+  { group: "One-Tap Pipelines", name: "Simple / Pro studio tiers", status: "working", where: "Studio header toggle" },
+
+  // ---------- Overlays+ (v2 drop) ----------
+  { group: "Overlays+", name: "Animated counter (Day 1 → Day 7, $0 → $1,000)", status: "working", where: "Editor → Overlays+" },
+  { group: "Overlays+", name: "3-2-1 countdown intro", status: "working", where: "Editor → Overlays+" },
+  { group: "Overlays+", name: "Location card (📍 place)", status: "working", where: "Editor → Overlays+" },
+  { group: "Overlays+", name: "Progress bar along the bottom", status: "working", where: "Editor → Overlays+" },
+  { group: "Overlays+", name: "Emoji reactions on excitement peaks", status: "working", where: "Editor → Overlays+" },
+  { group: "Overlays+", name: "Watermark / logo overlay", status: "working", where: "Editor → Overlays+ → Add watermark logo" },
+  { group: "Overlays+", name: "Smart caption emphasis (key word pops bigger)", status: "working", where: "automatic in kinetic captions" },
+  { group: "Overlays+", name: "Freeze-frame call-out with annotation", status: "roadmap", where: "needs frame-hold render path" },
+
+  // ---------- Audio polish (v2 drop) ----------
+  { group: "Audio Polish", name: "Music loudness auto-match", status: "working", where: "automatic when you add a track" },
+  { group: "Audio Polish", name: "Room-tone ambience on silent edits", status: "working", where: "automatic when the edit has no audio" },
+  { group: "Audio Polish", name: "Watch-muted mode (kinetic captions auto-enable)", status: "working", where: "automatic: captions + no audio" },
+  { group: "Audio Polish", name: "Voice-clarity EQ (rumble cut + presence lift)", status: "working", where: "audio-polish.polishVoice — voiceover UI soon" },
+  { group: "Audio Polish", name: "Silence / dead-air detection", status: "working", where: "audio-polish.silenceRanges — voiceover UI soon" },
+  { group: "Audio Polish", name: "Score mood auto-suggest from footage", status: "working", where: "audio-polish.suggestMood — surfacing UI soon" },
+
+  // ---------- Branding & distribution (v2 drop) ----------
+  { group: "Branding & Distribution", name: "Brand palette match (footage nudged toward your hex colors)", status: "working", where: "Studio → Pro → Brand colors" },
+  { group: "Branding & Distribution", name: "Multi-aspect export (1:1 square, 16:9 wide)", status: "working", where: "Export → More formats" },
+  { group: "Branding & Distribution", name: "Best-frame thumbnail picker", status: "working", where: "Export → More formats → Thumbnail" },
+  { group: "Branding & Distribution", name: "Caption + hashtag writer from your niche", status: "working", where: "Export → Post kit" },
+  { group: "Branding & Distribution", name: "Chapter markers export", status: "working", where: "Export → Post kit → Copy chapters" },
+  { group: "Branding & Distribution", name: "Multi-language caption pack", status: "key", where: "needs a translation-capable key — planned" },
+
+  // ---------- Honest roadmap (needs models/backends this stack doesn't have) ----------
+  { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "needs a face-detection model" },
+  { group: "Needs ML Models", name: "Chroma key (green screen)", status: "roadmap", where: "chromakey filter unverified in the WASM core" },
+  { group: "Needs ML Models", name: "Split-screen / PiP reaction layouts", status: "roadmap", where: "needs hstack/vstack probe + layout UI" },
+  { group: "Needs ML Models", name: "Beauty smoothing / eye-contact correction", status: "roadmap", where: "needs face models" },
+  { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a sharing backend" },
 ];
 
 export const featureCounts = () => {

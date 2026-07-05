@@ -18,10 +18,15 @@ import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/l
 import { compileDirection, applyPlanOps, mergeCompiled, type CompiledDirection } from "@/lib/prompt-compiler";
 import { resolveTransitionSfx } from "@/lib/sfx-web";
 import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
+import { GENRE_PRESETS, compilePreset, brandFilterFromHex } from "@/lib/creator-kit";
+import { counterCues, countdownCues, locationCard, progressBarCues, emojiCueTimes, emojiReactionCues, watermarkCue } from "@/lib/overlays-plus";
+import { distillWindows, detectBars } from "@/lib/clip-analysis";
+import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
 import { checkClipLimits } from "@/lib/limits";
 import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
 import InsightsPanel from "@/components/InsightsPanel";
+import CommandPalette from "@/components/CommandPalette";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { TransitionType, UserClip } from "@/lib/types";
@@ -45,6 +50,15 @@ export default function EditorPage() {
   const [beats, setBeats] = useState<BeatResult | null>(null);
   const [captionText, setCaptionText] = useState("");
   const [captionStyle, setCaptionStyle] = useState<CaptionStyleId>("bold");
+  // Overlays+ : location card, counter, countdown, progress bar, emoji
+  // reactions, watermark. All burned via the caption pipeline at render.
+  const [locationText, setLocationText] = useState("");
+  const [counter, setCounter] = useState<{ prefix: string; from: string; to: string }>({ prefix: "Day ", from: "", to: "" });
+  const [countdownIntro, setCountdownIntro] = useState(false);
+  const [progressBar, setProgressBar] = useState(false);
+  const [emojiReacts, setEmojiReacts] = useState(false);
+  const [watermark, setWatermark] = useState<{ name: string; blob: Blob } | null>(null);
+  const watermarkRef = useRef<HTMLInputElement>(null);
   const [direction, setDirection] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [renderPct, setRenderPct] = useState(0);
@@ -106,8 +120,17 @@ export default function EditorPage() {
         }
         const id = uuid();
         const thumbnail = await makeThumbnail(f);
+        // Strip letterbox/pillarbox bars baked into the source file — the
+        // crop rides the clip meta and is applied before reframe at render.
+        let sourceCrop: string | undefined;
+        try {
+          const bars = await detectBars(f);
+          if (bars) sourceCrop = bars.crop;
+        } catch {
+          // bar detection is best-effort
+        }
         await saveVideo(id, f, f.name);
-        const clip: UserClip = { id, name: f.name, duration, thumbnail };
+        const clip: UserClip = { id, name: f.name, duration, thumbnail, sourceCrop };
         await saveClipMeta(clip);
         addClip(clip);
       } catch {
@@ -115,6 +138,56 @@ export default function EditorPage() {
       }
     }
     setBusy(null);
+  }
+
+  // Distill a long clip into a highlight reel: analyze once, keep the best
+  // non-overlapping moments (~12s worth), and load them as the plan.
+  async function handleDistill(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Finding the best moments in ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const analysis = await analyzeClip(v.blob, { samplesPerSecond: 4, maxSamples: 160 });
+      const windows = distillWindows(analysis, 12);
+      const segments = windows.map((w, i) => ({
+        id: uuid(),
+        clipId: clip.id,
+        start: w.start,
+        end: w.end,
+        transitionAfter: i === windows.length - 1 ? null : ("hard-cut" as const),
+        speed: 1,
+      }));
+      const p = {
+        segments,
+        colorGrade: plan?.colorGrade ?? "none",
+        aiDirection: direction,
+        explanation: `Highlight reel: the ${windows.length} strongest moments distilled from ${clip.name} (${clip.duration.toFixed(0)}s → ~12s).`,
+      };
+      setPlan(p);
+      await savePlan("current", p);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't distill that clip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // One-tap genre preset: fills the direction AND applies the compiled
+  // pipeline immediately (same engine as typing the prompt).
+  function applyPreset(presetId: string) {
+    const preset = GENRE_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    setDirection(preset.direction);
+    const compiled = compilePreset(preset);
+    applyDirectionToStudio(compiled);
+    if (plan && (compiled.plan.transitionCycle || compiled.plan.transitionMap)) {
+      setPlan({
+        ...plan,
+        colorGrade: compiled.plan.colorGrade ?? plan.colorGrade,
+        segments: applyPlanOps(plan.segments, compiled.plan),
+      });
+    }
   }
 
   async function handleRemoveClip(id: string) {
@@ -286,20 +359,33 @@ export default function EditorPage() {
       setTasteNotes(taste.report.changes);
 
       const outDur = estimateOutputDuration(plan2.segments);
+      // Director's report: everything that actually fires in this render,
+      // so the user learns the toolbox by seeing it work.
+      const featureNotes: string[] = [];
+
+      // Watch-muted mode: with no music and no score, most viewers will see
+      // this silent — kinetic word-pops keep it legible with the sound off.
+      const willHaveAudio = !!music || !!studio2.scoreMood;
+      let useKinetic = studio2.kineticCaptions;
+      const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
+      if (!willHaveAudio && lines.length > 0 && !useKinetic) {
+        useKinetic = true;
+        featureNotes.push("Watch-muted mode: no audio track, so captions switched to kinetic word-pops for silent legibility.");
+      }
 
       // Captions: typed lines → full-line cues or kinetic word-pops.
       const burnCaptions: BurnCaption[] = [];
-      const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
       if (lines.length > 0) {
         setStage("Styling captions…");
         const cues = layoutCaptions(lines, outDur, beats?.beatTimes);
         for (const cue of cues) {
-          if (studio2.kineticCaptions) {
+          if (useKinetic) {
             burnCaptions.push(...(await kineticWordCues(cue.text, cue.start, cue.end)));
           } else {
             burnCaptions.push({ png: await renderCuePng(cue.text, captionStyle), start: cue.start, end: cue.end });
           }
         }
+        featureNotes.push(`${lines.length} caption line${lines.length > 1 ? "s" : ""} burned in (${useKinetic ? "kinetic word-pop" : CAPTION_STYLES[captionStyle].label} style).`);
       }
 
       // Title card over the first ~2.2s, credits over the tail.
@@ -322,6 +408,43 @@ export default function EditorPage() {
         }
       }
 
+      // Overlays+ : location card, counter, countdown, progress bar, emoji
+      // reactions, watermark — all burned through the same caption pipeline.
+      if (locationText.trim()) {
+        burnCaptions.push(await locationCard(locationText.trim(), outDur));
+        featureNotes.push(`Location card: 📍 ${locationText.trim()}.`);
+      }
+      const counterFrom = parseInt(counter.from, 10);
+      const counterTo = parseInt(counter.to, 10);
+      if (Number.isFinite(counterFrom) && Number.isFinite(counterTo) && counterFrom !== counterTo) {
+        setStage("Rendering counter overlay…");
+        burnCaptions.push(...(await counterCues({ prefix: counter.prefix, from: counterFrom, to: counterTo, totalDuration: outDur })));
+        featureNotes.push(`Animated counter: ${counter.prefix}${counterFrom} → ${counter.prefix}${counterTo}.`);
+      }
+      if (countdownIntro && outDur > 4) {
+        burnCaptions.push(...(await countdownCues(3)));
+        featureNotes.push("3-2-1 countdown intro.");
+      }
+      if (progressBar) {
+        setStage("Rendering progress bar…");
+        burnCaptions.push(...(await progressBarCues(outDur)));
+        featureNotes.push("Progress bar along the bottom.");
+      }
+      if (emojiReacts) {
+        setStage("Placing emoji reactions on the peaks…");
+        const analyses2 = new Map<string, ClipAnalysis>();
+        for (const [id, blob] of blobs) analyses2.set(id, await analyzeClip(blob, { samplesPerSecond: 4, maxSamples: 60 }));
+        const times = emojiCueTimes(plan2.segments, analyses2);
+        if (times.length > 0) {
+          burnCaptions.push(...(await emojiReactionCues(times, outDur)));
+          featureNotes.push(`Emoji reactions on ${times.length} excitement peak${times.length > 1 ? "s" : ""}.`);
+        }
+      }
+      if (watermark) {
+        burnCaptions.push(await watermarkCue(watermark.blob, outDur));
+        featureNotes.push("Watermark burned in (bottom-right).");
+      }
+
       // Per-clip auto color/exposure normalize (#5/#46)
       const normalizeByClip = new Map<string, string>();
       if (studio2.look.autoNormalize) {
@@ -333,6 +456,18 @@ export default function EditorPage() {
           const f = normalizeFilter(st, target);
           if (f) normalizeByClip.set(id, f);
         }
+        featureNotes.push("Color and exposure matched across clips.");
+      }
+
+      // Brand palette nudge: gentle tint toward the user's hex colors,
+      // applied with (after) the per-clip normalize filter.
+      const brand = studio2.brandHex?.trim() ? brandFilterFromHex(studio2.brandHex.split(/[\s,]+/)) : null;
+      if (brand) {
+        for (const id of blobs.keys()) {
+          const existing = normalizeByClip.get(id);
+          normalizeByClip.set(id, existing ? `${existing},${brand.filter}` : brand.filter);
+        }
+        featureNotes.push(`Footage nudged toward your brand palette (${brand.summary}).`);
       }
 
       // Subject-aware reframe (#11)
@@ -342,7 +477,20 @@ export default function EditorPage() {
         for (const [id, blob] of blobs) {
           reframeByClip.set(id, reframeFilter(await motionCentroidX(blob)));
         }
+        featureNotes.push("Subject-aware 9:16 reframe applied.");
       }
+
+      // Baked-in letterbox/pillarbox bars detected at upload get stripped
+      // FIRST (crop before reframe/scale), for every clip that has them.
+      let strippedBars = 0;
+      for (const id of blobs.keys()) {
+        const crop = clips.find((c) => c.id === id)?.sourceCrop;
+        if (!crop) continue;
+        const existing = reframeByClip.get(id);
+        reframeByClip.set(id, existing ? `${crop},${existing}` : crop);
+        strippedBars++;
+      }
+      if (strippedBars > 0) featureNotes.push(`Stripped baked-in bars from ${strippedBars} clip${strippedBars > 1 ? "s" : ""}.`);
 
       // Auto Ken Burns on static shots (#6)
       const motionBySegment = new Map<string, import("@/lib/motion").MotionEffect>();
@@ -367,6 +515,18 @@ export default function EditorPage() {
 
       // Audio: uploaded music, or composed score; plus auto SFX; mixed once.
       let finalAudio: Blob | undefined = music?.blob;
+      if (finalAudio) {
+        // Loudness-match the uploaded track so quiet rips and hot masters
+        // land at the same perceived level.
+        setStage("Matching music loudness…");
+        try {
+          const norm = await normalizeAudioBlob(finalAudio);
+          finalAudio = norm.blob;
+          if (norm.gain !== 1) featureNotes.push(`Music loudness matched (gain ×${norm.gain.toFixed(2)}).`);
+        } catch {
+          // normalization is best-effort; the original track still plays
+        }
+      }
       const sfxAt: { time: number; type: SfxType }[] = [];
       if (studio2.autoSfx) {
         let clock = 0;
@@ -402,10 +562,31 @@ export default function EditorPage() {
           sfxCues = sfxAt; // mixTimeline synthesizes when no blob is attached
         }
       }
+      // Completely silent edit? Lay in a barely-there room-tone bed so the
+      // output doesn't read as a broken/no-audio file on platforms.
+      if (!finalAudio && sfxCues.length === 0) {
+        setStage("Adding ambience…");
+        try {
+          finalAudio = await roomTone(outDur + 0.5);
+          featureNotes.push("Subtle room-tone ambience added (the edit had no audio at all).");
+        } catch {
+          // ambience is optional
+        }
+      }
       if (finalAudio || sfxCues.length > 0) {
         setStage("Mixing audio…");
         finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt: sfxCues });
       }
+
+      // Fill in the rest of the director's report and publish it.
+      if (studio2.look.grade !== "none") featureNotes.push(`Grade: ${studio2.look.grade}.`);
+      if (studio2.look.letterbox) featureNotes.push("Cinema letterbox bars.");
+      if (studio2.overlay) featureNotes.push(`${studio2.overlay} atmosphere layer at ${Math.round(studio2.overlayOpacity * 100)}%.`);
+      if (!music && studio2.scoreMood) featureNotes.push(`Original ${studio2.scoreMood} score composed on-device.`);
+      if (sfxCues.length > 0) featureNotes.push(`${sfxCues.length} transition sound effect${sfxCues.length > 1 ? "s" : ""} placed.`);
+      if (studio2.motionDefault !== "none") featureNotes.push(`Camera motion: ${studio2.motionDefault}.`);
+      if (motionBySegment.size > 0) featureNotes.push(`Auto Ken Burns on ${motionBySegment.size} static shot${motionBySegment.size > 1 ? "s" : ""}.`);
+      setTasteNotes([...taste.report.changes, ...featureNotes]);
 
       const out = await renderEdit(blobs, plan2.segments, {
         colorGrade: plan2.colorGrade,
@@ -475,6 +656,16 @@ export default function EditorPage() {
               <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 font-mono text-[10px]">
                 {c.duration.toFixed(1)}s
               </span>
+              {c.duration > 25 && (
+                <button
+                  onClick={() => handleDistill(c)}
+                  disabled={!!busy}
+                  className="absolute bottom-1 right-1 rounded bg-accent px-1.5 py-0.5 text-[9px] font-bold text-white"
+                  title="Distill this long clip into its best moments"
+                >
+                  ⚡ Distill
+                </button>
+              )}
             </div>
           ))}
           <button
@@ -514,6 +705,23 @@ export default function EditorPage() {
           rows={2}
           className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
         />
+        {/* One-tap genre presets — curated prompts through the same compiler */}
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {GENRE_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => applyPreset(p.id)}
+              title={p.tagline}
+              className={`rounded-full px-3 py-1.5 text-xs ${
+                direction === p.direction
+                  ? "bg-accent font-semibold text-white"
+                  : "border border-card-border text-neutral-300"
+              }`}
+            >
+              {p.emoji} {p.label}
+            </button>
+          ))}
+        </div>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {PROMPT_IDEAS.map((p) => (
             <button
@@ -643,6 +851,80 @@ export default function EditorPage() {
             </p>
           </div>
 
+          {/* Overlays+ : counters, cards, bars, reactions, watermark */}
+          <div className="mt-3">
+            <label className="text-xs font-semibold text-neutral-500">Overlays+</label>
+            <div className="mt-1.5 flex flex-col gap-2">
+              <input
+                value={locationText}
+                onChange={(e) => setLocationText(e.target.value)}
+                placeholder="📍 Location card — e.g. Bali, Indonesia"
+                className="rounded-xl border border-card-border bg-black px-4 py-2.5 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+              />
+              <div className="flex gap-2">
+                <input
+                  value={counter.prefix}
+                  onChange={(e) => setCounter({ ...counter, prefix: e.target.value })}
+                  placeholder="Day "
+                  aria-label="Counter prefix"
+                  className="w-20 rounded-xl border border-card-border bg-black px-3 py-2.5 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+                />
+                <input
+                  value={counter.from}
+                  onChange={(e) => setCounter({ ...counter, from: e.target.value })}
+                  placeholder="from 1"
+                  inputMode="numeric"
+                  aria-label="Counter start"
+                  className="min-w-0 flex-1 rounded-xl border border-card-border bg-black px-3 py-2.5 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+                />
+                <input
+                  value={counter.to}
+                  onChange={(e) => setCounter({ ...counter, to: e.target.value })}
+                  placeholder="to 7"
+                  inputMode="numeric"
+                  aria-label="Counter end"
+                  className="min-w-0 flex-1 rounded-xl border border-card-border bg-black px-3 py-2.5 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setCountdownIntro(!countdownIntro)}
+                  className={`rounded-full px-3 py-1.5 text-xs ${countdownIntro ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"}`}
+                >
+                  3·2·1 intro
+                </button>
+                <button
+                  onClick={() => setProgressBar(!progressBar)}
+                  className={`rounded-full px-3 py-1.5 text-xs ${progressBar ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"}`}
+                >
+                  Progress bar
+                </button>
+                <button
+                  onClick={() => setEmojiReacts(!emojiReacts)}
+                  className={`rounded-full px-3 py-1.5 text-xs ${emojiReacts ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"}`}
+                >
+                  🔥 Emoji reactions
+                </button>
+                <button
+                  onClick={() => (watermark ? setWatermark(null) : watermarkRef.current?.click())}
+                  className={`rounded-full px-3 py-1.5 text-xs ${watermark ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"}`}
+                >
+                  {watermark ? `Logo: ${watermark.name.slice(0, 14)} ✕` : "Add watermark logo"}
+                </button>
+              </div>
+              <input
+                ref={watermarkRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setWatermark({ name: f.name, blob: f });
+                }}
+              />
+            </div>
+          </div>
+
           {/* Color grade — a quick-access shortcut for the same grade the
               Studio's Look & Grade panel controls. renderEdit always uses
               studio.look.grade when it's set (genre looks/film stocks there
@@ -700,7 +982,7 @@ export default function EditorPage() {
       )}
       {tasteNotes.length > 0 && (
         <div className="card mt-5 px-4 py-3">
-          <p className="text-xs font-bold text-neutral-300">🎬 Director&apos;s notes — restraint applied</p>
+          <p className="text-xs font-bold text-neutral-300">🎬 Director&apos;s notes — everything this render did</p>
           {tasteNotes.map((n, i) => (
             <p key={i} className="mt-1 text-[11px] leading-4 text-neutral-500">• {n}</p>
           ))}
@@ -739,6 +1021,9 @@ export default function EditorPage() {
           <Trash2 size={12} /> Clear all clips
         </button>
       )}
+
+      {/* ⌘K — every tool, searchable */}
+      <CommandPalette />
     </main>
   );
 }

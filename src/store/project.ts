@@ -21,6 +21,7 @@ export interface StudioConfig {
   kineticCaptions: boolean; // word-by-word pop instead of full lines
   titleCard: { title: string; subtitle: string; style: "minimal" | "epic" | "typewriter" } | null;
   credits: string; // newline "role | name" lines, empty = off
+  brandHex: string; // comma/space-separated brand hex colors, "" = off
 }
 
 export const DEFAULT_STUDIO: StudioConfig = {
@@ -35,6 +36,7 @@ export const DEFAULT_STUDIO: StudioConfig = {
   kineticCaptions: false,
   titleCard: null,
   credits: "",
+  brandHex: "",
 };
 
 interface ProjectState {

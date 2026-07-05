@@ -131,6 +131,92 @@ export function topHighlights(a: ClipAnalysis, want: number, count: number): { s
   return out;
 }
 
+// Distill a LONG clip into a highlight reel: the best non-overlapping
+// moments, in chronological order, totaling ~targetSeconds. Shot length
+// adapts to the target (shorter target → punchier shots). Pure — works from
+// an existing analysis, so tests run in Node.
+export function distillWindows(
+  a: ClipAnalysis,
+  targetSeconds: number,
+  opts: { minShot?: number; maxShot?: number } = {}
+): { start: number; end: number }[] {
+  if (a.duration <= targetSeconds) return [{ start: 0, end: Number(a.duration.toFixed(2)) }];
+  const minShot = opts.minShot ?? 0.8;
+  const maxShot = opts.maxShot ?? 2.5;
+  const shotLen = Math.max(minShot, Math.min(maxShot, targetSeconds / 6));
+  const count = Math.max(1, Math.round(targetSeconds / shotLen));
+  return topHighlights(a, shotLen, count).sort((x, y) => x.start - y.start);
+}
+
+// Detect letterbox/pillarbox bars baked into the SOURCE footage (black rows
+// or columns present across sampled frames) and return an FFmpeg crop filter
+// that strips them — so bars from someone else's export don't get re-framed
+// into the 9:16 output as dead space. Returns null when the clip is clean.
+export async function detectBars(blob: Blob): Promise<{ crop: string; note: string } | null> {
+  const url = URL.createObjectURL(blob);
+  const v = document.createElement("video");
+  v.preload = "auto";
+  v.muted = true;
+  v.src = url;
+  try {
+    await new Promise<void>((res, rej) => {
+      v.onloadeddata = () => res();
+      v.onerror = () => rej(new Error("bar-detect load failed"));
+    });
+    const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 3;
+    const S = 96;
+    const c = document.createElement("canvas");
+    c.width = S;
+    c.height = S;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+
+    // "black across ALL samples" — a dark scene in one frame shouldn't count
+    const rowMax = new Float32Array(S).fill(0);
+    const colMax = new Float32Array(S).fill(0);
+    for (const frac of [0.15, 0.5, 0.85]) {
+      await new Promise<void>((res) => {
+        v.onseeked = () => res();
+        v.currentTime = Math.min(dur - 0.05, dur * frac);
+      });
+      ctx.drawImage(v, 0, 0, S, S);
+      const d = ctx.getImageData(0, 0, S, S).data;
+      for (let y = 0; y < S; y++) {
+        for (let x = 0; x < S; x++) {
+          const p = (y * S + x) * 4;
+          const lum = (d[p] + d[p + 1] + d[p + 2]) / 3;
+          if (lum > rowMax[y]) rowMax[y] = lum;
+          if (lum > colMax[x]) colMax[x] = lum;
+        }
+      }
+    }
+    const BLACK = 12;
+    let top = 0;
+    while (top < S / 3 && rowMax[top] < BLACK) top++;
+    let bottom = 0;
+    while (bottom < S / 3 && rowMax[S - 1 - bottom] < BLACK) bottom++;
+    let left = 0;
+    while (left < S / 3 && colMax[left] < BLACK) left++;
+    let right = 0;
+    while (right < S / 3 && colMax[S - 1 - right] < BLACK) right++;
+
+    // require a meaningful bar (≥4% of the frame) to avoid nibbling shadows
+    const MIN = Math.round(S * 0.04);
+    if (top < MIN && bottom < MIN && left < MIN && right < MIN) return null;
+
+    const wFrac = (S - left - right) / S;
+    const hFrac = (S - top - bottom) / S;
+    const xFrac = left / S;
+    const yFrac = top / S;
+    const crop = `crop=iw*${wFrac.toFixed(3)}:ih*${hFrac.toFixed(3)}:iw*${xFrac.toFixed(3)}:ih*${yFrac.toFixed(3)}`;
+    const parts: string[] = [];
+    if (top >= MIN || bottom >= MIN) parts.push("letterbox bars");
+    if (left >= MIN || right >= MIN) parts.push("pillarbox bars");
+    return { crop, note: `Stripped baked-in ${parts.join(" + ")}` };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // Estimate dominant optical flow near a timestamp by testing candidate
 // whole-frame shifts and a zoom, picking the one that best aligns two
 // frames a short interval apart. Coarse but reliable for pans/zooms.

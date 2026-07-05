@@ -74,6 +74,9 @@ export interface UserClip {
   duration: number;
   // Blob stored in IndexedDB, object URL created at runtime
   thumbnail?: string;
+  // FFmpeg crop filter that strips letterbox/pillarbox bars baked into the
+  // source file (detected at upload, applied before reframe/scale at render)
+  sourceCrop?: string;
 }
 
 export interface TimelineSegment {

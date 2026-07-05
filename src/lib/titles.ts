@@ -147,6 +147,10 @@ export async function kineticWordCues(
 ): Promise<BurnCaption[]> {
   const words = line.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
+  // The line's key word (number / longest content word) pops harder: bigger
+  // type and always accent-colored — smart emphasis instead of every-3rd.
+  const { pickEmphasisWord } = await import("./creator-kit");
+  const emphasis = pickEmphasisWord(line)?.index ?? -1;
   const slice = (end - start) / words.length;
   const cues: BurnCaption[] = [];
   for (let i = 0; i < words.length; i++) {
@@ -158,13 +162,14 @@ export async function kineticWordCues(
     ctx.textBaseline = "middle";
     // context words (dim) with the active word big + accent
     const y = H * 0.75;
-    ctx.font = "900 86px Arial, sans-serif";
+    const isKey = i === emphasis;
+    ctx.font = `900 ${isKey ? 108 : 86}px Arial, sans-serif`;
     const word = words[i].toUpperCase();
-    ctx.lineWidth = 14;
+    ctx.lineWidth = isKey ? 16 : 14;
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#000";
     ctx.strokeText(word, W / 2, y);
-    ctx.fillStyle = i % 3 === 2 ? "#ff5c35" : "#ffffff";
+    ctx.fillStyle = isKey || i % 3 === 2 ? "#ff5c35" : "#ffffff";
     ctx.fillText(word, W / 2, y);
     cues.push({
       png: await new Promise<Blob>((res) => c.toBlob((b) => res(b!), "image/png")),

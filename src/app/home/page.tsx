@@ -10,6 +10,7 @@ import { VIRAL_TEMPLATES } from "@/lib/templates";
 import { probeDuration } from "@/lib/ffmpeg-client";
 import { checkReferenceLimits } from "@/lib/limits";
 import { useProject } from "@/store/project";
+import CommandPalette from "@/components/CommandPalette";
 import type { EditBlueprint } from "@/lib/types";
 
 export default function Home() {
@@ -274,6 +275,9 @@ export default function Home() {
           Skip analysis → edit my clips directly
         </button>
       </div>
+
+      {/* ⌘K — every tool, searchable */}
+      <CommandPalette />
     </main>
   );
 }
