@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Captions, Mic, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
@@ -22,6 +22,7 @@ import { GENRE_PRESETS, compilePreset, brandFilterFromHex } from "@/lib/creator-
 import { counterCues, countdownCues, locationCard, progressBarCues, emojiCueTimes, emojiReactionCues, watermarkCue } from "@/lib/overlays-plus";
 import { distillWindows, detectBars } from "@/lib/clip-analysis";
 import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
+import { estimateRenderCost, renderCostMessage } from "@/lib/render-cost";
 import { checkClipLimits } from "@/lib/limits";
 import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
@@ -71,6 +72,19 @@ export default function EditorPage() {
   // "render failed" that gives no clue what to retry or report.
   const renderStageRef = useRef<string | null>(null);
   const ffmpegLoadedRef = useRef(false);
+  // Per-clip motion/brightness analysis is the single most expensive thing a
+  // render does (seek-heavy). Cache it by clipId so auto Ken Burns, emoji
+  // reactions, AND repeat renders reuse ONE pass per clip instead of 2–3.
+  // Clip bytes are immutable per id, so the cache never goes stale; it's
+  // cleared when clips are removed.
+  const analysisRef = useRef<Map<string, ClipAnalysis>>(new Map());
+  const getAnalysis = async (id: string, blob: Blob): Promise<ClipAnalysis> => {
+    const cached = analysisRef.current.get(id);
+    if (cached) return cached;
+    const a = await analyzeClip(blob, { samplesPerSecond: 5, maxSamples: 60 });
+    analysisRef.current.set(id, a);
+    return a;
+  };
   const setStage = (msg: string) => {
     renderStageRef.current = msg;
     setBusy(msg);
@@ -192,6 +206,7 @@ export default function EditorPage() {
 
   async function handleRemoveClip(id: string) {
     removeClip(id);
+    analysisRef.current.delete(id);
     await Promise.all([deleteClipMeta(id), deleteVideo(id)]);
   }
 
@@ -326,6 +341,49 @@ export default function EditorPage() {
     setPickerFor(null);
   }
 
+  // Live render-cost estimate from the current settings — recomputed as the
+  // user toggles effects, so a heavy combo (Ken Burns + grain + atmosphere…)
+  // warns BEFORE they commit to a multi-minute render instead of after.
+  const costEstimate = useMemo(() => {
+    if (!plan) return null;
+    const captionLines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
+    const captionCount =
+      (studio.kineticCaptions
+        ? captionLines.reduce((n, l) => n + l.split(/\s+/).length, 0)
+        : captionLines.length) +
+      (studio.titleCard?.title ? 1 : 0) +
+      studio.credits.split("\n").filter((l) => l.trim()).length +
+      (locationText.trim() ? 1 : 0) +
+      (countdownIntro ? 3 : 0) +
+      (progressBar ? 8 : 0) +
+      (emojiReacts ? 3 : 0) +
+      (watermark ? 1 : 0) +
+      (Number.isFinite(parseInt(counter.from, 10)) && Number.isFinite(parseInt(counter.to, 10))
+        ? Math.min(30, Math.abs(parseInt(counter.to, 10) - parseInt(counter.from, 10)) + 1)
+        : 0);
+    const uniqueClips = new Set(plan.segments.map((s) => s.clipId)).size;
+    return estimateRenderCost({
+      clipCount: uniqueClips,
+      segmentCount: plan.segments.length,
+      grade: studio.look.grade,
+      grain: studio.look.grain > 0,
+      halation: studio.look.halation,
+      vignette: studio.look.vignette > 0,
+      anamorphic: studio.look.anamorphic,
+      letterbox: studio.look.letterbox,
+      denoise: studio.look.denoise,
+      autoNormalize: studio.look.autoNormalize,
+      autoKenBurns: studio.autoKenBurns,
+      autoReframe: studio.autoReframe,
+      motionDefault: studio.motionDefault,
+      emojiReactions: emojiReacts,
+      overlay: !!studio.overlay,
+      scoreMood: !!studio.scoreMood || !!music,
+      music: !!music,
+      captionCount,
+    });
+  }, [plan, studio, captionText, locationText, counter, countdownIntro, progressBar, emojiReacts, watermark, music]);
+
   async function handleRender() {
     if (!plan) return;
     setError(null);
@@ -433,7 +491,7 @@ export default function EditorPage() {
       if (emojiReacts) {
         setStage("Placing emoji reactions on the peaks…");
         const analyses2 = new Map<string, ClipAnalysis>();
-        for (const [id, blob] of blobs) analyses2.set(id, await analyzeClip(blob, { samplesPerSecond: 4, maxSamples: 60 }));
+        for (const [id, blob] of blobs) analyses2.set(id, await getAnalysis(id, blob));
         const times = emojiCueTimes(plan2.segments, analyses2);
         if (times.length > 0) {
           burnCaptions.push(...(await emojiReactionCues(times, outDur)));
@@ -497,7 +555,7 @@ export default function EditorPage() {
       if (studio2.autoKenBurns) {
         setStage("Adding virtual camera moves…");
         const analyses = new Map<string, ClipAnalysis>();
-        for (const [id, blob] of blobs) analyses.set(id, await analyzeClip(blob, { samplesPerSecond: 5, maxSamples: 60 }));
+        for (const [id, blob] of blobs) analyses.set(id, await getAnalysis(id, blob));
         plan2.segments.forEach((seg, i) => {
           const a = analyses.get(seg.clipId);
           if (a && isStaticShot(a, seg.start, seg.end)) {
@@ -954,10 +1012,24 @@ export default function EditorPage() {
             </div>
           </div>
 
+          {costEstimate && (
+            <div
+              className={`mt-4 flex items-start gap-2 rounded-xl px-3 py-2 text-[11px] leading-4 ${
+                costEstimate.level === "heavy"
+                  ? "bg-amber-500/10 text-amber-400"
+                  : costEstimate.level === "moderate"
+                    ? "bg-neutral-800/60 text-neutral-400"
+                    : "bg-neutral-800/40 text-neutral-500"
+              }`}
+            >
+              <span className="mt-px shrink-0">{costEstimate.level === "heavy" ? "⏳" : "⚡"}</span>
+              <span>{renderCostMessage(costEstimate)}</span>
+            </div>
+          )}
           <button
             onClick={handleRender}
             disabled={!!busy}
-            className="btn-primary mt-5 w-full py-4 text-lg"
+            className="btn-primary mt-3 w-full py-4 text-lg"
           >
             Render my edit →
           </button>

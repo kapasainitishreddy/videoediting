@@ -6,7 +6,7 @@
 //  • bestFrame() — scan the render for the most thumbnail-worthy frame:
 //    sharp, well-exposed, colorful. Returns a JPEG ready to upload.
 import { fetchFile } from "@ffmpeg/util";
-import { getFFmpeg } from "./ffmpeg-client";
+import { getFFmpeg, probeDuration } from "./ffmpeg-client";
 
 function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
   const buf = new ArrayBuffer(u8.byteLength);
@@ -71,6 +71,18 @@ export function frameScore(data: Uint8ClampedArray, w: number, h: number): numbe
 }
 
 export async function bestFrame(video: Blob, samples = 14): Promise<{ jpeg: Blob; at: number }> {
+  try {
+    return await bestFrameViaVideo(video, samples);
+  } catch {
+    // <video> can't decode this codec here (e.g. no native H.264 decoder) —
+    // fall back to the FFmpeg WASM core, which decodes it just fine.
+    return await bestFrameViaWasm(video, samples);
+  }
+}
+
+// Fast path: scan frames with a <video> element (works wherever the browser
+// can decode the codec — every real phone/desktop for H.264).
+async function bestFrameViaVideo(video: Blob, samples: number): Promise<{ jpeg: Blob; at: number }> {
   const url = URL.createObjectURL(video);
   const v = document.createElement("video");
   v.preload = "auto";
@@ -104,7 +116,6 @@ export async function bestFrame(video: Blob, samples = 14): Promise<{ jpeg: Blob
       }
     }
 
-    // re-grab the winner at full resolution
     await new Promise<void>((res) => {
       v.onseeked = () => res();
       v.currentTime = Math.min(dur - 0.05, bestT);
@@ -118,4 +129,66 @@ export async function bestFrame(video: Blob, samples = 14): Promise<{ jpeg: Blob
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// Load a PNG blob into pixel data via an <img> (works for any image, no video
+// decoder needed).
+async function pngToPixels(png: Blob): Promise<{ data: Uint8ClampedArray; w: number; h: number; img: HTMLImageElement }> {
+  const url = URL.createObjectURL(png);
+  const img = new Image();
+  await new Promise((res, rej) => {
+    img.onload = res;
+    img.onerror = rej;
+    img.src = url;
+  });
+  URL.revokeObjectURL(url);
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext("2d", { willReadFrequently: true })!;
+  ctx.drawImage(img, 0, 0);
+  return { data: ctx.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height, img };
+}
+
+// Fallback path: extract candidate frames with the FFmpeg WASM core (decodes
+// H.264 anywhere), score them as images, return the winner re-encoded to JPEG.
+async function bestFrameViaWasm(video: Blob, samples: number): Promise<{ jpeg: Blob; at: number }> {
+  const ff = await getFFmpeg();
+  const dur = await probeDuration(video).catch(() => 5);
+  await ff.writeFile("bf.mp4", await fetchFile(video));
+
+  let bestT = dur / 2;
+  let bestScore = -1;
+  for (let i = 0; i < samples; i++) {
+    const t = ((i + 0.5) / samples) * dur;
+    const name = `bf_${i}.png`;
+    // input-seek to a small scaled frame — fast, precise enough for scoring
+    const code = await ff.exec(["-ss", t.toFixed(2), "-i", "bf.mp4", "-frames:v", "1", "-vf", "scale=120:-2", "-y", name]);
+    if (code !== 0) continue;
+    try {
+      const d = (await ff.readFile(name)) as Uint8Array;
+      await ff.deleteFile(name);
+      const { data, w, h } = await pngToPixels(new Blob([toArrayBuffer(d)], { type: "image/png" }));
+      const score = frameScore(data, w, h);
+      if (score > bestScore) {
+        bestScore = score;
+        bestT = t;
+      }
+    } catch {
+      // undecodable sample — skip
+    }
+  }
+
+  // full-resolution grab of the winner, PNG → JPEG via canvas
+  await ff.exec(["-ss", bestT.toFixed(2), "-i", "bf.mp4", "-frames:v", "1", "-y", "bf_best.png"]);
+  const bestPng = (await ff.readFile("bf_best.png")) as Uint8Array;
+  await ff.deleteFile("bf_best.png").catch(() => {});
+  await ff.deleteFile("bf.mp4").catch(() => {});
+  const { img } = await pngToPixels(new Blob([toArrayBuffer(bestPng)], { type: "image/png" }));
+  const out = document.createElement("canvas");
+  out.width = img.width;
+  out.height = img.height;
+  out.getContext("2d")!.drawImage(img, 0, 0);
+  const jpeg = await new Promise<Blob>((res) => out.toBlob((b) => res(b!), "image/jpeg", 0.92));
+  return { jpeg, at: Number(bestT.toFixed(2)) };
 }

@@ -117,8 +117,9 @@ export async function locationCard(text: string, totalDuration: number): Promise
 
 // --- Progress / XP bar -----------------------------------------------------------------
 // Thin bar along the bottom that fills across the edit — a subtle "stay to
-// the end" cue for tutorials and challenges. 12 steps keeps the PNG count low.
-export async function progressBarCues(totalDuration: number, steps = 12): Promise<BurnCaption[]> {
+// the end" cue for tutorials and challenges. 8 steps reads as smooth while
+// keeping the burn-in overlay count (and render cost) low.
+export async function progressBarCues(totalDuration: number, steps = 8): Promise<BurnCaption[]> {
   const cues: BurnCaption[] = [];
   const slot = totalDuration / steps;
   const barY = H - 14;
