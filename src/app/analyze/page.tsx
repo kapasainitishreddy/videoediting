@@ -9,6 +9,7 @@ import { detectTransitionsV2 } from "@/lib/detect";
 import { assembleBlueprintV2 } from "@/lib/analyzer";
 import { transitionByType } from "@/lib/transitions";
 import { classifyNicheLocal, nicheEmoji, type StyleHints } from "@/lib/niche";
+import { withCredit } from "@/lib/wallet";
 import { useProject } from "@/store/project";
 import type { EditBlueprint } from "@/lib/types";
 
@@ -107,40 +108,48 @@ function AnalyzeInner() {
           samples: detection.samples,
         });
 
-        // Optional AI enrichment — same normalized shape regardless of
-        // whether MiniMax, Anthropic, or OpenAI is configured
-        try {
-          const res = await fetch("/api/ai", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              task: "label-transitions",
-              payload: {
-                // v2 evidence: the model gets our confident local labels and
-                // only refines wording/borderline types — a weak model can't
-                // drag quality down below the deterministic floor.
-                detected: blueprint.transitions.map((t) => ({
-                  time: t.time,
-                  type: t.type,
-                  confidence: t.confidence,
-                  evidence: t.description,
-                })),
-                duration: detection.duration,
-              },
-            }),
-          });
-          const j = await res.json();
-          if (j.available && j.result?.transitions) {
-            for (const t of blueprint.transitions) {
-              const ai = j.result.transitions.find(
-                (a: { time: number }) => Math.abs(a.time - t.time) < 0.3
-              );
-              if (ai?.description) t.description = ai.description;
+        // Optional AI enrichment — 1 credit for the reel's AI analysis, and
+        // ONLY charged if a provider is actually configured (auto-refunded
+        // otherwise). Same normalized shape regardless of which provider
+        // answered. If out of credits, the deterministic breakdown stands.
+        let aiAvailable = false;
+        const gate = await withCredit("ai-analyze", async () => {
+          try {
+            const res = await fetch("/api/ai", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                task: "label-transitions",
+                payload: {
+                  // v2 evidence: the model gets our confident local labels and
+                  // only refines wording/borderline types — a weak model can't
+                  // drag quality below the deterministic floor.
+                  detected: blueprint.transitions.map((t) => ({
+                    time: t.time,
+                    type: t.type,
+                    confidence: t.confidence,
+                    evidence: t.description,
+                  })),
+                  duration: detection.duration,
+                },
+              }),
+            });
+            const j = await res.json();
+            aiAvailable = !!j.available;
+            if (j.available && j.result?.transitions) {
+              for (const t of blueprint.transitions) {
+                const ai = j.result.transitions.find(
+                  (a: { time: number }) => Math.abs(a.time - t.time) < 0.3
+                );
+                if (ai?.description) t.description = ai.description;
+              }
             }
+            return { available: aiAvailable };
+          } catch {
+            return { available: false }; // best-effort → refund
           }
-        } catch {
-          // AI enrichment is best-effort
-        }
+        });
+        void gate;
 
         // Niche / category extraction. Deterministic local classify from the
         // title + edit-style stats always runs (the floor). When the title
@@ -153,7 +162,10 @@ function AnalyzeInner() {
           transitionCount: blueprint.transitions.length,
         };
         let niche = classifyNicheLocal(name, styleHints);
-        if (niche.confidence < 0.6) {
+        // Vision niche refinement reuses the analysis credit already paid
+        // above (aiAvailable = a provider ran) — no extra charge, and only
+        // when the local guess is weak.
+        if (niche.confidence < 0.6 && aiAvailable) {
           try {
             setProgress({ pct: 96, msg: "Detecting the niche…" });
             const frames = await grabFrameDataUrls(stored.blob, 4);

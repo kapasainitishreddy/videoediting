@@ -23,6 +23,8 @@ import { counterCues, countdownCues, locationCard, progressBarCues, emojiCueTime
 import { distillWindows, detectBars } from "@/lib/clip-analysis";
 import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
 import { estimateRenderCost, renderCostMessage } from "@/lib/render-cost";
+import { withCredit } from "@/lib/wallet";
+import CreditsChip from "@/components/CreditsChip";
 import { checkClipLimits } from "@/lib/limits";
 import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
@@ -263,21 +265,36 @@ export default function EditorPage() {
           body: JSON.stringify({ task, payload }),
         }).then((r) => r.json());
 
-      const [editRes, compileRes] = await Promise.allSettled([
-        post("edit-directions", { direction, plan: p }),
-        compiled ? post("compile-direction", { direction }) : Promise.resolve(null),
-      ]);
-
-      if (editRes.status === "fulfilled") {
-        const j = editRes.value;
-        if (j?.available && j.result?.segments?.length) {
-          p.segments = j.result.segments;
-          p.colorGrade = j.result.colorGrade ?? p.colorGrade;
-          p.explanation += ` Refined by AI (${j.provider}).`;
-        }
+      // The AI refine (edit-directions + compile-direction) is ONE credited
+      // action. If the user is out of credits we skip it and keep the fully-
+      // working on-device edit; if no provider key is configured the credit is
+      // auto-refunded (the request was free). Editing itself is never charged.
+      type EditReply = { available?: boolean; provider?: string; result?: { segments?: typeof p.segments; colorGrade?: string } };
+      type CompileReply = { available?: boolean; result?: Partial<CompiledDirection> };
+      let editReply: EditReply | null = null;
+      let compileReply: CompileReply | null = null;
+      const gate = await withCredit("ai-edit", async () => {
+        const [e, c] = await Promise.allSettled([
+          post("edit-directions", { direction, plan: p }),
+          compiled ? post("compile-direction", { direction }) : Promise.resolve(null),
+        ]);
+        editReply = e.status === "fulfilled" ? (e.value as EditReply) : null;
+        compileReply = c.status === "fulfilled" ? (c.value as CompileReply) : null;
+        return { available: !!(editReply?.available || compileReply?.available) };
+      });
+      if (gate.broke) {
+        p.explanation += " (Out of AI credits — using the on-device edit; add credits on the Pricing page for AI refinement.)";
       }
-      if (compiled && compileRes.status === "fulfilled" && compileRes.value?.available && compileRes.value.result) {
-        compiled = mergeCompiled(compiled, compileRes.value.result);
+
+      const er = editReply as EditReply | null;
+      if (er?.available && er.result?.segments?.length) {
+        p.segments = er.result.segments;
+        p.colorGrade = er.result.colorGrade ?? p.colorGrade;
+        p.explanation += ` Refined by AI (${er.provider}).`;
+      }
+      const cr = compileReply as CompileReply | null;
+      if (compiled && cr?.available && cr.result) {
+        compiled = mergeCompiled(compiled, cr.result);
       }
 
       // Apply the compiled direction: drive the Studio (look/score/SFX/overlay/
@@ -682,7 +699,10 @@ export default function EditorPage() {
   return (
     <main className="flex flex-1 flex-col px-6 pb-10 pt-12">
       <header className="mb-6">
-        <p className="text-xs font-bold uppercase tracking-widest text-accent">Step 2 — your clips</p>
+        <div className="flex items-start justify-between">
+          <p className="text-xs font-bold uppercase tracking-widest text-accent">Step 2 — your clips</p>
+          <CreditsChip />
+        </div>
         <h1 className="mt-1 text-2xl font-extrabold">Build your edit</h1>
         {blueprint ? (
           <p className="mt-1 text-sm text-neutral-400">

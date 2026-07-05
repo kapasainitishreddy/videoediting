@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Upload, Clapperboard, ChevronRight, Flame, Heart, Import, ListChecks } from "lucide-react";
+import { Link2, Upload, Clapperboard, ChevronRight, Flame, Gem, Heart, Import, ListChecks } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, listBlueprints, listFingerprints, saveBlueprint } from "@/lib/storage";
 import { tasteProfile, blueprintFromCode, type Fingerprint } from "@/lib/intelligence";
@@ -11,6 +11,7 @@ import { probeDuration } from "@/lib/ffmpeg-client";
 import { checkReferenceLimits } from "@/lib/limits";
 import { useProject } from "@/store/project";
 import CommandPalette from "@/components/CommandPalette";
+import CreditsChip from "@/components/CreditsChip";
 import type { EditBlueprint } from "@/lib/types";
 
 export default function Home() {
@@ -98,11 +99,18 @@ export default function Home() {
   return (
     <main className="flex flex-1 flex-col px-6 pb-10 pt-14">
       <header className="mb-8">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-widest text-accent">ViralEdit AI</span>
+          <CreditsChip />
+        </div>
         <h1 className="text-3xl font-extrabold tracking-tight">
           Drop a viral reel<span className="text-accent">.</span>
         </h1>
         <p className="mt-2 text-neutral-400">
           Paste a link or upload a video — AI maps every cut and transition.
+        </p>
+        <p className="mt-2 text-xs leading-5 text-neutral-500">
+          The only editor that reverse-engineers a viral reel and rebuilds it with <span className="text-neutral-300">your</span> clips — one prompt, on your device, free.
         </p>
       </header>
 
@@ -258,12 +266,18 @@ export default function Home() {
         <p className="mt-1 text-[10px] text-neutral-500">A friend&apos;s cut recipe — timings and transitions only, no video.</p>
       </section>
 
-      <div className="mt-4">
+      <div className="mt-4 flex gap-2">
         <button
           onClick={() => router.push("/features")}
-          className="flex w-full items-center justify-center gap-2 rounded-full border border-card-border py-3 text-xs text-neutral-400"
+          className="flex flex-1 items-center justify-center gap-2 rounded-full border border-card-border py-3 text-xs text-neutral-400"
         >
-          <ListChecks size={13} /> Everything this app can do
+          <ListChecks size={13} /> Everything it can do
+        </button>
+        <button
+          onClick={() => router.push("/pricing")}
+          className="flex flex-1 items-center justify-center gap-2 rounded-full border border-card-border py-3 text-xs text-neutral-400"
+        >
+          <Gem size={13} className="text-accent" /> Pricing & credits
         </button>
       </div>
 

@@ -37,6 +37,17 @@ const SLIDES = [
     ),
     body: "Upload your footage, type what you want — “make it cinematic” — and export a beat-synced edit in one tap.",
   },
+  {
+    art: "ON YOUR DEVICE",
+    title: (
+      <>
+        Free to edit,
+        <br />
+        private by design
+      </>
+    ),
+    body: "Every cut and export runs on your own device — no watermark, no upload. Add any AI key, even a basic one, and it just gets smarter.",
+  },
 ];
 
 export default function Onboarding() {

@@ -118,6 +118,14 @@ export const FEATURES: Feature[] = [
   { group: "AI Generation", name: "AI B-roll generation (text → clip)", status: "key", where: "MINIMAX_API_KEY via /api/generate" },
   { group: "AI Generation", name: "Smarter transition labels / edit refinement", status: "key", where: "any of the three provider keys" },
 
+  // ---------- Business & access ----------
+  { group: "Business & Access", name: "Unlimited free on-device editing & export", status: "working", where: "no account, no watermark — renders in your browser" },
+  { group: "Business & Access", name: "Credits + pricing page (4 tiers)", status: "working", where: "/pricing — balance chip on Home & Editor" },
+  { group: "Business & Access", name: "Fair AI billing (charge only if the AI ran, auto-refund)", status: "working", where: "wallet.withCredit — spend + refund-if-unavailable" },
+  { group: "Business & Access", name: "Bring-your-own AI key (meter off)", status: "working", where: "Studio tier — any provider key in .env.local" },
+  { group: "Business & Access", name: "Payment checkout", status: "roadmap", where: "startCheckout() stub — wire Stripe/Lemon/Paddle" },
+  { group: "Business & Access", name: "Server-side credit enforcement", status: "roadmap", where: "mirror spend at /api boundary for paid tiers" },
+
   // ---------- Retention & hooks (v2 drop) ----------
   { group: "Retention & Hooks", name: "Retention risk heatmap on the timeline", status: "working", where: "Editor → Insights" },
   { group: "Retention & Hooks", name: "Dead-intro detector with exact trim suggestion", status: "working", where: "Editor → Insights (under the heatmap)" },
