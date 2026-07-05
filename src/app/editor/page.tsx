@@ -15,6 +15,8 @@ import { analyzeClip, type ClipAnalysis } from "@/lib/clip-analysis";
 import { isStaticShot, motionCentroidX, reframeFilter } from "@/lib/motion";
 import { generateOverlayClip } from "@/lib/overlays";
 import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import { compileDirection, applyPlanOps, mergeCompiled, type CompiledDirection } from "@/lib/prompt-compiler";
+import { resolveTransitionSfx } from "@/lib/sfx-web";
 import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
 import { checkClipLimits } from "@/lib/limits";
 import { reportError } from "@/lib/report-error";
@@ -37,7 +39,7 @@ export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const musicRef = useRef<HTMLInputElement>(null);
-  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio } = useProject();
+  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio, setStudio } = useProject();
 
   const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
   const [beats, setBeats] = useState<BeatResult | null>(null);
@@ -152,24 +154,57 @@ export default function EditorPage() {
         onProgress: (msg) => setBusy(msg),
       });
 
-      // Optional AI refinement — works identically no matter which key
-      // (MiniMax/Anthropic/OpenAI) is configured in .env.local, since the
-      // API route normalizes every provider's reply to the same schema.
+      // Turn the ONE plain-English direction into the whole edit. smartAutoEdit
+      // already shaped the cut pattern + motion-matched transitions; the prompt
+      // compiler now resolves the rest of the pipeline the direction implies —
+      // color look, score mood, transition SOUND EFFECTS, atmosphere, captions —
+      // deterministically and with no key required (the quality floor).
+      setBusy("Interpreting your direction…");
+      let compiled: CompiledDirection | null = direction.trim() ? compileDirection(direction) : null;
+
+      // Optional AI refinement — BOTH the plan (edit-directions) and the
+      // pipeline settings (compile-direction) in parallel. Works identically
+      // no matter which key is set: every provider's reply is clamped to the
+      // same schema server-side, and if no key is configured both just no-op
+      // and the deterministic result stands.
       setBusy("Refining…");
-      try {
-        const res = await fetch("/api/ai", {
+      const post = (task: string, payload: unknown) =>
+        fetch("/api/ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ task: "edit-directions", payload: { direction, plan: p } }),
-        });
-        const j = await res.json();
-        if (j.available && j.result?.segments?.length) {
+          body: JSON.stringify({ task, payload }),
+        }).then((r) => r.json());
+
+      const [editRes, compileRes] = await Promise.allSettled([
+        post("edit-directions", { direction, plan: p }),
+        compiled ? post("compile-direction", { direction }) : Promise.resolve(null),
+      ]);
+
+      if (editRes.status === "fulfilled") {
+        const j = editRes.value;
+        if (j?.available && j.result?.segments?.length) {
           p.segments = j.result.segments;
           p.colorGrade = j.result.colorGrade ?? p.colorGrade;
           p.explanation += ` Refined by AI (${j.provider}).`;
         }
-      } catch {
-        // best-effort
+      }
+      if (compiled && compileRes.status === "fulfilled" && compileRes.value?.available && compileRes.value.result) {
+        compiled = mergeCompiled(compiled, compileRes.value.result);
+      }
+
+      // Apply the compiled direction: drive the Studio (look/score/SFX/overlay/
+      // captions), keep the color-grade chip in sync, and honor any explicit
+      // transition style the user asked for (whip/zoom/glitch/flash/slide…).
+      if (compiled) {
+        applyDirectionToStudio(compiled);
+        if (compiled.plan.colorGrade) p.colorGrade = compiled.plan.colorGrade;
+        if (compiled.plan.transitionCycle || compiled.plan.transitionMap) {
+          p.segments = applyPlanOps(p.segments, {
+            transitionCycle: compiled.plan.transitionCycle,
+            transitionMap: compiled.plan.transitionMap,
+          });
+        }
+        if (compiled.notes.length) p.explanation += ` Pipeline: ${compiled.summary}.`;
       }
 
       setPlan(p);
@@ -179,6 +214,25 @@ export default function EditorPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  // Map a compiled direction onto the Studio config. Only fields the compiler
+  // actually set are written (undefined never clobbers a user's toggle), and
+  // the look is merged onto the current look rather than replacing it.
+  function applyDirectionToStudio(c: CompiledDirection) {
+    const cur = useProject.getState().studio;
+    const s = c.studio;
+    const patch: Partial<typeof cur> = {};
+    if (s.motionDefault !== undefined) patch.motionDefault = s.motionDefault;
+    if (s.autoKenBurns !== undefined) patch.autoKenBurns = s.autoKenBurns;
+    if (s.autoReframe !== undefined) patch.autoReframe = s.autoReframe;
+    if (s.overlay !== undefined) patch.overlay = s.overlay;
+    if (s.overlayOpacity !== undefined) patch.overlayOpacity = s.overlayOpacity;
+    if (s.scoreMood !== undefined) patch.scoreMood = s.scoreMood;
+    if (s.autoSfx !== undefined) patch.autoSfx = s.autoSfx;
+    if (s.kineticCaptions !== undefined) patch.kineticCaptions = s.kineticCaptions;
+    if (Object.keys(s.look).length) patch.look = { ...cur.look, ...s.look };
+    setStudio(patch);
   }
 
   // Mirror renderEdit's duration math so captions line up with the output.
@@ -336,9 +390,21 @@ export default function EditorPage() {
         setStage("Composing your score…");
         finalAudio = await composeScore({ bpm: beats?.bpm ?? blueprint?.beats?.bpm ?? 100, seconds: outDur + 0.5, mood: studio2.scoreMood });
       }
-      if (finalAudio || sfxAt.length > 0) {
+      // Resolve each transition SFX cue to a real audio file from the web
+      // (bundled /sfx/*.wav, or an owner-configured CDN), falling back to
+      // synthesis per-cue if a fetch fails — so the SFX always land.
+      let sfxCues: { time: number; type: SfxType; blob?: Blob }[] = sfxAt;
+      if (sfxAt.length > 0) {
+        setStage("Loading sound effects…");
+        try {
+          sfxCues = await resolveTransitionSfx(sfxAt);
+        } catch {
+          sfxCues = sfxAt; // mixTimeline synthesizes when no blob is attached
+        }
+      }
+      if (finalAudio || sfxCues.length > 0) {
         setStage("Mixing audio…");
-        finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt });
+        finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt: sfxCues });
       }
 
       const out = await renderEdit(blobs, plan2.segments, {

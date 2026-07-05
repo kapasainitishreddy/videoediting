@@ -10,6 +10,8 @@
 // clip, it gets clamped or dropped here — never passed through raw.
 import type { TransitionType } from "./types";
 import { TRANSITIONS, COLOR_GRADES } from "./transitions";
+import { COMPILE_DIRECTION_PROMPT } from "./prompt-compiler";
+import { CLASSIFY_NICHE_PROMPT } from "./niche";
 
 const VALID_TRANSITIONS = new Set<string>(TRANSITIONS.map((t) => t.type));
 const VALID_GRADES = new Set<string>(Object.keys(COLOR_GRADES));
@@ -105,4 +107,9 @@ export function normalizeEditPlan(raw: unknown, knownClipIds: Set<string>, fallb
 export const TASK_PROMPTS: Record<string, string> = {
   "label-transitions": `You are a viral video editing expert. You receive transitions ALREADY DETECTED by a deterministic analyzer (time, type, confidence, evidence). Your job is only to polish: improve each description into one vivid, useful sentence for a creator recreating the edit, and correct a type ONLY when the evidence clearly contradicts it AND confidence < 0.8. You MUST pick "type" only from: ${TRANSITIONS.map((t) => t.type).join(", ")}. Keep every time value unchanged. Respond with ONLY a JSON object, no prose, no markdown fences: {"transitions":[{"time":number,"type":string,"description":string}]}`,
   "edit-directions": `You are a viral video editor. The user gives you a plain-English direction and a current edit plan (segments with clipId, start, end, transitionAfter, speed; plus a colorGrade). Return an improved plan as JSON with the SAME segment clipIds (never invent new ones) — only adjust start/end/transitionAfter/speed/colorGrade to match the direction. "transitionAfter" must be one of: ${TRANSITIONS.map((t) => t.type).join(", ")}, or null for the last segment. "colorGrade" must be one of: ${Object.keys(COLOR_GRADES).join(", ")}. Respond with ONLY a JSON object, no prose, no markdown fences: {"segments":[{"id":string,"clipId":string,"start":number,"end":number,"transitionAfter":string|null,"speed":number}],"colorGrade":string}`,
+  // Refines the deterministic prompt-compiler result: model returns a flat
+  // settings object, normalizeCompiledDirection clamps it to real enums.
+  "compile-direction": COMPILE_DIRECTION_PROMPT,
+  // Vision (or text) niche classification; normalizeNiche clamps to taxonomy.
+  "classify-niche": CLASSIFY_NICHE_PROMPT,
 };

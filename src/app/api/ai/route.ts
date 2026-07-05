@@ -6,6 +6,8 @@ import {
   normalizeEditPlan,
   type NormalizedEditPlan,
 } from "@/lib/ai-schema";
+import { normalizeCompiledDirection } from "@/lib/prompt-compiler";
+import { normalizeNiche } from "@/lib/niche";
 import { checkRateLimit, clientIp, rateLimitResponse } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
@@ -56,9 +58,25 @@ export async function POST(req: NextRequest) {
   const system = TASK_PROMPTS[body.task ?? ""];
   if (!system) return Response.json({ error: `Unknown task: ${body.task}` }, { status: 400 });
 
+  // classify-niche may carry sample frames as data URIs. Pull them out of the
+  // text payload and hand them to the provider's vision channel instead of
+  // stringifying ~100KB of base64 into the prompt. Text-only providers ignore
+  // them and answer from the title/style alone.
+  let images: string[] | undefined;
+  let payloadForText: unknown = body.payload;
+  if (body.task === "classify-niche") {
+    const p = (body.payload ?? {}) as { frames?: unknown };
+    if (Array.isArray(p.frames)) {
+      images = p.frames.filter((f): f is string => typeof f === "string" && f.startsWith("data:")).slice(0, 6);
+    }
+    const { frames, ...rest } = p as Record<string, unknown>;
+    void frames;
+    payloadForText = rest;
+  }
+
   let raw: unknown;
   try {
-    const text = await provider.call(system, JSON.stringify(body.payload));
+    const text = await provider.call(system, JSON.stringify(payloadForText), images);
     raw = extractJson(text);
     if (raw === null) {
       return Response.json(
@@ -89,6 +107,20 @@ export async function POST(req: NextRequest) {
       ? { segments: payload.plan.segments, colorGrade: payload.plan.colorGrade }
       : { segments: [], colorGrade: "none" };
     const result = normalizeEditPlan(raw, knownClipIds, fallback);
+    return Response.json({ available: true, provider: provider.name, result });
+  }
+
+  if (body.task === "compile-direction") {
+    // The model returns a flat settings object; clamp every field to the
+    // app's real enums. The client lays this over its own deterministic
+    // compile, so an empty/partial refinement never breaks the pipeline.
+    const result = normalizeCompiledDirection(raw);
+    return Response.json({ available: true, provider: provider.name, result });
+  }
+
+  if (body.task === "classify-niche") {
+    // Clamp to the fixed taxonomy — an unknown niche maps to "general".
+    const result = normalizeNiche(raw);
     return Response.json({ available: true, provider: provider.name, result });
   }
 

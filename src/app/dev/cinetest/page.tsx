@@ -9,6 +9,7 @@
 //  5. sfx+mix   — mixTimeline WAV has audible energy at transition times
 //  6. captions  — kinetic word cue PNGs generate with correct windows
 //  7. intel     — virality/pace/coldopen/codes round-trip
+//  8. web sfx   — bundled /sfx file loads, bogus URL → synth, blob plays in mix
 import { useEffect, useState } from "react";
 import { v4 as uuid } from "uuid";
 import { renderEdit, getFFmpeg } from "@/lib/ffmpeg-client";
@@ -188,6 +189,36 @@ export default function CineTest() {
         v.score > 0 && v.score <= 100 && p.acts.length === 3 && typeof co.pass === "boolean" &&
         !!back && back.transitions.length === 6 && back.beats?.bpm === 120;
       add(`   virality=${v.score}, acts=${p.acts.length}, code roundtrip=${!!back} → ${results.intel ? "OK ✅" : "FAIL ❌"}`);
+
+      // 8. web sfx loader: real bundled file loads + bogus URL falls back to
+      //    synth + mixTimeline actually PLAYS the fetched blob at the cue.
+      add("8) web sfx loader + blob mix…");
+      const { resolveSfxBlob } = await import("@/lib/sfx-web");
+      const real = await resolveSfxBlob("whoosh", ["/sfx/whoosh.wav"]);
+      const fell = await resolveSfxBlob("whoosh", ["/sfx/__does_not_exist__.wav"]);
+      const ac2 = new window.AudioContext();
+      const realBuf = await ac2.decodeAudioData(await real.blob.arrayBuffer());
+      const realOk =
+        real.source === "/sfx/whoosh.wav" && realBuf.duration > 0.3 &&
+        realBuf.getChannelData(0).some((v) => Math.abs(v) > 0.05);
+      const fellOk = fell.source === "synth" && fell.blob.size > 256;
+      add(`   real file: source=${real.source} dur=${realBuf.duration.toFixed(2)}s audible=${realOk ? "YES ✅" : "NO ❌"}`);
+      add(`   bogus URL: source=${fell.source} size=${fell.blob.size} → ${fellOk ? "synth fallback ✅" : "❌"}`);
+      const mixedBlob = await mixTimeline({ seconds: 3, music: null, sfxAt: [{ time: 1.0, type: "whoosh", blob: real.blob }] });
+      const mb = await ac2.decodeAudioData(await mixedBlob.arrayBuffer());
+      const dd = mb.getChannelData(0);
+      const eAt = (t: number) => {
+        let e = 0;
+        const i0 = Math.floor(t * mb.sampleRate);
+        for (let i = i0; i < i0 + 4410; i++) e += Math.abs(dd[i] || 0);
+        return e / 4410;
+      };
+      const blobEnergy = eAt(1.1);
+      const quiet = eAt(0.4);
+      const mixOk = blobEnergy > quiet * 2 && blobEnergy > 0.004;
+      add(`   blob mix energy@1.0s=${blobEnergy.toFixed(4)} vs 0.4s=${quiet.toFixed(4)} → ${mixOk ? "OK ✅" : "FAIL ❌"}`);
+      ac2.close();
+      results.websfx = realOk && fellOk && mixOk;
 
       const all = Object.values(results).every(Boolean);
       add(all ? "\nALL CINEMATIC CHECKS PASS ✅" : "\nSOME FAILED ❌ " + JSON.stringify(results));

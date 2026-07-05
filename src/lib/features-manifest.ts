@@ -18,6 +18,7 @@ export const FEATURES: Feature[] = [
   { group: "Viral Intelligence", name: "Trend fingerprinting + taste profile", status: "working", where: "Analyze → Save style · Home shows your profile" },
   { group: "Viral Intelligence", name: "Virality score with breakdown", status: "working", where: "Editor → below timeline" },
   { group: "Viral Intelligence", name: "Reverse-engineer any reel (cut map, BPM, style)", status: "working", where: "Home → paste link / upload" },
+  { group: "Viral Intelligence", name: "Niche / category extraction (title + edit-style, vision-refined)", status: "working", where: "Analyze → niche card" },
   { group: "Viral Intelligence", name: "Format migration (TikTok / Reels / Shorts)", status: "working", where: "Analyze → Adapt for another platform" },
   { group: "Viral Intelligence", name: "Style blending (pacing from A, look from B)", status: "working", where: "intelligence.blendStyles — surfacing UI soon" },
   { group: "Viral Intelligence", name: "Blueprint share codes (recipe only, no video)", status: "working", where: "Editor → Insights → Copy code · Home → Import" },
@@ -28,6 +29,7 @@ export const FEATURES: Feature[] = [
 
   // ---------- Direction & coaching ----------
   { group: "Direction & Coaching", name: "Plain-English AI direction", status: "working", where: "Editor → Direct the AI" },
+  { group: "Direction & Coaching", name: "One-prompt full edit (transitions + SFX + look + score)", status: "working", where: "Editor → Direct the AI — prompt-compiler drives the Studio" },
   { group: "Direction & Coaching", name: "Voice-directed editing", status: "working", where: "Editor → mic button (Chrome/Safari)" },
   { group: "Direction & Coaching", name: "Step-by-step recreation guide", status: "working", where: "Analyze → How to recreate it" },
   { group: "Direction & Coaching", name: "Shot list generator", status: "working", where: "Analyze → Shot list" },
@@ -89,6 +91,7 @@ export const FEATURES: Feature[] = [
   // ---------- Sound & score ----------
   { group: "Sound & Score", name: "Original score composition (BPM + mood matched)", status: "working", where: "Studio → Score & Sound — synthesized on-device" },
   { group: "Sound & Score", name: "Auto sound FX on transitions (whoosh/impact/glitch/riser)", status: "working", where: "Studio → auto SFX toggle" },
+  { group: "Sound & Score", name: "Web sound-effect library with offline fallback", status: "working", where: "sfx-web.ts → /sfx/*.wav, synth if a fetch fails" },
   { group: "Sound & Score", name: "Real beat detection from your music", status: "working", where: "Editor → add music, then Auto-edit" },
   { group: "Sound & Score", name: "S-curve music ducking under speech", status: "working", where: "audio-cinema.mixTimeline — voiceover UI soon" },
   { group: "Sound & Score", name: "Speech-range detection", status: "working", where: "audio-cinema.speechRanges" },

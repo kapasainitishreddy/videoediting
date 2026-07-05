@@ -144,7 +144,13 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname.startsWith("/api/")) return; // network-only, no interception
 
-  if (url.pathname.startsWith("/ffmpeg/") || url.pathname.startsWith("/icons/")) {
+  if (
+    url.pathname.startsWith("/ffmpeg/") ||
+    url.pathname.startsWith("/icons/") ||
+    url.pathname.startsWith("/sfx/")
+  ) {
+    // /sfx/** are the bundled transition sound effects — static and small;
+    // cache-first so they're available offline after the first render.
     event.respondWith(cacheFirst(req));
     return;
   }

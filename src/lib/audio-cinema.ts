@@ -234,7 +234,10 @@ export async function speechRanges(voice: Blob): Promise<{ start: number; end: n
 export async function mixTimeline(opts: {
   seconds: number;
   music?: Blob | null; // uploaded track OR composed score
-  sfxAt?: { time: number; type: SfxType }[];
+  // Each cue is placed at `time`. When `blob` is present (a real web/bundled
+  // SFX file, see sfx-web.ts) it's played verbatim; otherwise `type` is
+  // synthesized on the fly — so a missing/blocked download never drops the SFX.
+  sfxAt?: { time: number; type: SfxType; blob?: Blob }[];
   voiceover?: Blob | null;
 }): Promise<Blob> {
   const sr = 44100;
@@ -242,6 +245,28 @@ export async function mixTimeline(opts: {
 
   let duckRanges: { start: number; end: number }[] = [];
   if (opts.voiceover) duckRanges = await speechRanges(opts.voiceover);
+
+  // Pre-decode any real SFX blobs (async) before the synchronous scheduling
+  // loop below. De-duplicated so a whoosh reused 8 times decodes once.
+  const sfxCues = opts.sfxAt ?? [];
+  const sfxBuffers = new Map<Blob, AudioBuffer>();
+  const toDecode = [...new Set(sfxCues.map((s) => s.blob).filter((b): b is Blob => !!b))];
+  if (toDecode.length) {
+    const AC: typeof AudioContext =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const tmp = new AC();
+    try {
+      for (const blob of toDecode) {
+        try {
+          sfxBuffers.set(blob, await tmp.decodeAudioData(await blob.arrayBuffer()));
+        } catch {
+          // undecodable file → this cue will synthesize instead
+        }
+      }
+    } finally {
+      tmp.close();
+    }
+  }
 
   if (opts.music) {
     const AC: typeof AudioContext =
@@ -268,8 +293,22 @@ export async function mixTimeline(opts: {
     src.start(0);
   }
 
-  for (const s of opts.sfxAt ?? []) {
-    if (s.time >= 0 && s.time < opts.seconds) renderSfxInto(ctx, s.type, s.time, 0.9);
+  for (const s of sfxCues) {
+    if (s.time < 0 || s.time >= opts.seconds) continue;
+    const buf = s.blob ? sfxBuffers.get(s.blob) : undefined;
+    if (buf) {
+      // Real SFX file: play it at the cut.
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const g = ctx.createGain();
+      g.gain.value = 0.9;
+      src.connect(g);
+      g.connect(ctx.destination);
+      src.start(s.time);
+    } else {
+      // No file (or it failed to decode) → synthesize.
+      renderSfxInto(ctx, s.type, s.time, 0.9);
+    }
   }
 
   if (opts.voiceover) {

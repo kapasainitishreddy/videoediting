@@ -8,8 +8,53 @@ import { paceAnalysis, shotList, fingerprintOf, migrateFormat } from "@/lib/inte
 import { detectTransitionsV2 } from "@/lib/detect";
 import { assembleBlueprintV2 } from "@/lib/analyzer";
 import { transitionByType } from "@/lib/transitions";
+import { classifyNicheLocal, nicheEmoji, type StyleHints } from "@/lib/niche";
 import { useProject } from "@/store/project";
 import type { EditBlueprint } from "@/lib/types";
+
+// Grab a few evenly-spaced frames as JPEG data URIs for the vision niche
+// classifier. Uses <video>+canvas (no FFmpeg) so it's cheap — the detector
+// already read the file, and we only reach here when the title is inconclusive.
+async function grabFrameDataUrls(blob: Blob, count = 4): Promise<string[]> {
+  const url = URL.createObjectURL(blob);
+  const v = document.createElement("video");
+  v.preload = "auto";
+  v.muted = true;
+  v.src = url;
+  try {
+    await new Promise<void>((res, rej) => {
+      v.onloadeddata = () => res();
+      v.onerror = () => rej(new Error("frame load failed"));
+    });
+    const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 3;
+    const W = 320;
+    const H = v.videoWidth ? Math.round((v.videoHeight / v.videoWidth) * W) : 568;
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext("2d")!;
+    const out: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const t = ((i + 0.5) / count) * dur;
+      await new Promise<void>((res) => {
+        v.onseeked = () => res();
+        v.currentTime = Math.min(dur - 0.05, t);
+      });
+      ctx.drawImage(v, 0, 0, W, H);
+      out.push(c.toDataURL("image/jpeg", 0.7));
+    }
+    return out;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const NICHE_SOURCE_LABEL: Record<string, string> = {
+  title: "from the caption",
+  style: "from the edit style",
+  ai: "AI vision analysis",
+  fallback: "best guess",
+};
 
 function AnalyzeInner() {
   const params = useSearchParams();
@@ -97,6 +142,41 @@ function AnalyzeInner() {
           // AI enrichment is best-effort
         }
 
+        // Niche / category extraction. Deterministic local classify from the
+        // title + edit-style stats always runs (the floor). When the title
+        // alone is inconclusive, refine with vision AI on a few frames — this
+        // is what handles uploads whose filename says nothing ("IMG_1234.mov").
+        const styleHints: StyleHints = {
+          pacing: blueprint.style.pacing,
+          colorGrade: blueprint.style.colorGrade,
+          avgShotLength: blueprint.style.avgShotLength,
+          transitionCount: blueprint.transitions.length,
+        };
+        let niche = classifyNicheLocal(name, styleHints);
+        if (niche.confidence < 0.6) {
+          try {
+            setProgress({ pct: 96, msg: "Detecting the niche…" });
+            const frames = await grabFrameDataUrls(stored.blob, 4);
+            const res = await fetch("/api/ai", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                task: "classify-niche",
+                payload: { title: name, style: styleHints, frames },
+              }),
+            });
+            const j = await res.json();
+            // Only take the AI answer if it's at least as confident and not a
+            // "general" cop-out over a real local guess.
+            if (j.available && j.result && j.result.id !== "general" && (j.result.confidence ?? 0) >= niche.confidence) {
+              niche = j.result;
+            }
+          } catch {
+            // vision niche is best-effort — the local result stands
+          }
+        }
+        blueprint.niche = niche;
+
         await saveBlueprint(blueprint);
         setBp(blueprint);
         setBlueprint(blueprint);
@@ -147,6 +227,21 @@ function AnalyzeInner() {
           {bp.beats ? ` · ~${bp.beats.bpm} BPM` : ""}
         </p>
       </header>
+
+      {/* Niche / category */}
+      {bp.niche && (
+        <section className="card mb-4 flex items-center gap-3 px-4 py-3">
+          <span className="text-2xl" aria-hidden>{nicheEmoji(bp.niche.id)}</span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold">
+              {bp.niche.label} <span className="font-normal text-neutral-500">niche</span>
+            </div>
+            <div className="text-xs text-neutral-500">
+              {Math.round(bp.niche.confidence * 100)}% confidence · {NICHE_SOURCE_LABEL[bp.niche.source] ?? bp.niche.source}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Cut map */}
       <section className="card p-4">

@@ -37,6 +37,17 @@ export interface StyleProfile {
   notes: string[];
 }
 
+// The niche/category the reference reel belongs to (travel, fitness, food…).
+// Optional so older saved blueprints stay valid. Kept structural (not the
+// NicheId union) to avoid a client-module import in this shared types file;
+// niche.ts owns the canonical taxonomy and validates ids.
+export interface BlueprintNiche {
+  id: string;
+  label: string;
+  confidence: number;
+  source: "title" | "style" | "ai" | "fallback";
+}
+
 export interface EditBlueprint {
   id: string;
   sourceName: string;
@@ -46,6 +57,7 @@ export interface EditBlueprint {
   beats: BeatInfo | null;
   style: StyleProfile;
   guide: GuideStep[]; // step-by-step recreation guide
+  niche?: BlueprintNiche; // detected content category (optional/back-compat)
   createdAt: number;
 }
 
