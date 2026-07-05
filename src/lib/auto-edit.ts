@@ -1,86 +1,18 @@
 "use client";
 
-// Auto-Edit: maps the user's clips onto the blueprint's cut pattern and
-// interprets plain-English direction into concrete edit settings.
+// Auto-Edit: maps the user's clips onto the blueprint's cut pattern.
 // Fully local; when a MiniMax key is present /api/edit refines the plan.
+// Plain-English direction is NOT interpreted here — src/lib/prompt-compiler.ts
+// (called from the editor page) owns that job. It's a strict superset of the
+// regex rules this file used to carry, covering color grade, transition
+// style, pacing, score mood, SFX, atmosphere, and captions from one direction
+// string. Keeping direction-parsing in one place avoids two systems silently
+// fighting over the same segment fields and printing contradictory summaries.
 import { v4 as uuid } from "uuid";
 import type { EditBlueprint, EditPlan, TimelineSegment, TransitionType, UserClip } from "./types";
 import { analyzeClip, topHighlights, flowAt, type ClipAnalysis } from "./clip-analysis";
 import { matchTransition } from "./motion-match";
 import { snapToBeats, type BeatResult } from "./beats";
-
-const DIRECTION_RULES: { match: RegExp; apply: (p: EditPlan) => void; note: string }[] = [
-  {
-    match: /cinematic|movie|film/i,
-    apply: (p) => {
-      p.colorGrade = "cinematic";
-      for (const s of p.segments) if (s.transitionAfter === "hard-cut") s.transitionAfter = "fade";
-    },
-    note: "cinematic look: teal-orange grade + soft fades",
-  },
-  {
-    match: /warm|golden|sunset|travel/i,
-    apply: (p) => {
-      p.colorGrade = "warm";
-      for (const s of p.segments) if (s.transitionAfter === "flash") s.transitionAfter = "light-leak";
-    },
-    note: "warm travel vibe: golden grade + light leaks",
-  },
-  {
-    match: /fast|energy|hype|beat/i,
-    apply: (p) => {
-      for (const s of p.segments) {
-        s.end = Math.min(s.end, s.start + Math.max(0.6, (s.end - s.start) * 0.7));
-        if (s.transitionAfter === "fade") s.transitionAfter = "whip-pan";
-      }
-    },
-    note: "high energy: shorter cuts + whip pans",
-  },
-  {
-    match: /slow|calm|chill|aesthetic/i,
-    apply: (p) => {
-      p.colorGrade = p.colorGrade === "none" ? "vintage" : p.colorGrade;
-      for (const s of p.segments) {
-        s.speed = 0.85;
-        if (s.transitionAfter === "whip-pan" || s.transitionAfter === "flash") s.transitionAfter = "fade";
-      }
-    },
-    note: "calm aesthetic: gentle slow-mo + dissolves",
-  },
-  {
-    match: /glitch|edgy|dark/i,
-    apply: (p) => {
-      p.colorGrade = "cool";
-      p.segments.forEach((s, i) => {
-        if (i % 2 === 0) s.transitionAfter = "glitch";
-      });
-    },
-    note: "edgy: glitch transitions + cool grade",
-  },
-  {
-    match: /zoom/i,
-    apply: (p) => {
-      p.segments.forEach((s, i) => {
-        s.transitionAfter = i % 2 === 0 ? "zoom-in" : "zoom-out";
-      });
-    },
-    note: "zoom-driven transitions throughout",
-  },
-  {
-    match: /black.?(and|&).?white|b&w|noir/i,
-    apply: (p) => {
-      p.colorGrade = "bw";
-    },
-    note: "black & white noir grade",
-  },
-  {
-    match: /smooth/i,
-    apply: (p) => {
-      for (const s of p.segments) if (s.transitionAfter === "hard-cut") s.transitionAfter = "blur";
-    },
-    note: "smoothed every hard cut into a blur dissolve",
-  },
-];
 
 // ---------------------------------------------------------------------------
 // Smart Auto-Edit — the real thing. Analyzes each clip to cut on its
@@ -220,15 +152,9 @@ export async function smartAutoEdit(args: SmartEditArgs): Promise<EditPlan> {
       `Transitions chosen from the footage motion — e.g. ${reasons.slice(0, 2).join(", ")}.`,
   };
 
-  // 6. Apply plain-English direction on top (user intent overrides).
-  const applied: string[] = [];
-  for (const rule of DIRECTION_RULES) {
-    if (rule.match.test(direction)) {
-      rule.apply(plan);
-      applied.push(rule.note);
-    }
-  }
-  if (applied.length > 0) plan.explanation += ` Your direction: ${applied.join("; ")}.`;
+  // Plain-English direction is applied by the caller via prompt-compiler's
+  // compileDirection()/applyPlanOps(), which covers grade, transitions,
+  // pacing, score, SFX, atmosphere, and captions from the same string.
   return plan;
 }
 

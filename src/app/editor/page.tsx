@@ -643,16 +643,25 @@ export default function EditorPage() {
             </p>
           </div>
 
-          {/* Color grade */}
+          {/* Color grade — a quick-access shortcut for the same grade the
+              Studio's Look & Grade panel controls. renderEdit always uses
+              studio.look.grade when it's set (genre looks/film stocks there
+              win over this simple picker), so this sets BOTH fields and
+              shows active state from studio.look.grade — otherwise picking a
+              grade here would silently do nothing whenever a richer look is
+              already selected in the Studio. */}
           <div className="mt-3">
             <label className="text-xs font-semibold text-neutral-500">Color grade</label>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {Object.entries(COLOR_GRADES).map(([key, g]) => (
                 <button
                   key={key}
-                  onClick={() => setPlan({ ...plan, colorGrade: key })}
+                  onClick={() => {
+                    setPlan({ ...plan, colorGrade: key });
+                    setStudio({ look: { ...studio.look, grade: key } });
+                  }}
                   className={`rounded-full px-3 py-1 text-xs ${
-                    plan.colorGrade === key
+                    studio.look.grade === key
                       ? "bg-accent font-semibold text-white"
                       : "border border-card-border text-neutral-400"
                   }`}
