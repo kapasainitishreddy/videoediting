@@ -4,6 +4,7 @@ import {
   TASK_PROMPTS,
   normalizeLabelTransitions,
   normalizeEditPlan,
+  normalizeTranslations,
   type NormalizedEditPlan,
 } from "@/lib/ai-schema";
 import { normalizeCompiledDirection } from "@/lib/prompt-compiler";
@@ -121,6 +122,16 @@ export async function POST(req: NextRequest) {
   if (body.task === "classify-niche") {
     // Clamp to the fixed taxonomy — an unknown niche maps to "general".
     const result = normalizeNiche(raw);
+    return Response.json({ available: true, provider: provider.name, result });
+  }
+
+  if (body.task === "translate-captions") {
+    const payload = (body.payload ?? {}) as { lines?: unknown[]; languages?: unknown[] };
+    const lines = (Array.isArray(payload.lines) ? payload.lines : []).filter((l): l is string => typeof l === "string");
+    const languages = (Array.isArray(payload.languages) ? payload.languages : []).filter(
+      (l): l is string => typeof l === "string"
+    );
+    const result = { translations: normalizeTranslations(raw, lines, languages) };
     return Response.json({ available: true, provider: provider.name, result });
   }
 

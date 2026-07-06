@@ -20,7 +20,10 @@ const results = await page
 await browser.close();
 
 console.log(JSON.stringify(results, null, 2));
-const expected = ["chromakey", "chroma_color_bg", "chroma_blur_bg", "track_crop", "face_punch", "chroma_pixels"];
+const expected = [
+  "chromakey", "chroma_color_bg", "chroma_blur_bg", "track_crop", "face_punch",
+  "delogo", "lut3d", "vset_image_bg", "chroma_pixels",
+];
 const missing = expected.filter((k) => !(k in results));
 const bad = Object.entries(results).filter(([, v]) => v !== "ok");
 if (missing.length || bad.length) {

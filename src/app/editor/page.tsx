@@ -21,10 +21,13 @@ import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
 import { GENRE_PRESETS, compilePreset, brandFilterFromHex } from "@/lib/creator-kit";
 import { counterCues, countdownCues, locationCard, progressBarCues, emojiCueTimes, emojiReactionCues, watermarkCue } from "@/lib/overlays-plus";
 import { distillWindows, detectBars } from "@/lib/clip-analysis";
-import { trackFace, trackAction, detectClipKeyColor } from "@/lib/track-client";
+import { trackFace, trackAction, detectClipKeyColor, detectFacesAt } from "@/lib/track-client";
 import { pathCenter, mapToCenterCrop, type TrackPath } from "@/lib/track-core";
 import { DEFAULT_CHROMA, type ChromaSettings } from "@/lib/chroma";
 import { removeBackground } from "@/lib/segmenter";
+import { removeWatermark } from "@/lib/ffmpeg-client";
+import { VIRTUAL_SETS, isVirtualSet, renderVirtualSet } from "@/lib/vset";
+import ProTools from "@/components/ProTools";
 import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
 import { estimateRenderCost, renderCostMessage } from "@/lib/render-cost";
 import { withCredit } from "@/lib/wallet";
@@ -72,6 +75,10 @@ export default function EditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
   const [toolsFor, setToolsFor] = useState<string | null>(null); // clip id → AI tools card
+  // Multi-face picker: several faces were found — the user chooses which one
+  // the lock follows before any tracking runs.
+  const [faceChoices, setFaceChoices] = useState<{ clipId: string; faces: { cx: number; cy: number; size: number }[] } | null>(null);
+  const [draftUrl, setDraftUrl] = useState<string | null>(null); // quick low-res cut preview
   const [listening, setListening] = useState(false);
   const [tasteNotes, setTasteNotes] = useState<string[]>([]);
   // Tracks the last render stage so a mid-pipeline failure tells the user
@@ -230,9 +237,10 @@ export default function EditorPage() {
 
   // Face lock / Action lock: run the tracker NOW (instant feedback if there's
   // no face / no motion to follow), cache the path, persist only the intent.
-  async function handleTrackToggle(clip: UserClip, mode: "face" | "action") {
+  async function handleTrackToggle(clip: UserClip, mode: "face" | "action", near?: { cx: number; cy: number }) {
     setError(null);
-    if (clip.track === mode) {
+    setFaceChoices(null);
+    if (clip.track === mode && !near) {
       trackPathsRef.current.delete(clip.id);
       updateClip(clip.id, { track: null });
       await saveClipMeta({ ...clip, track: null }).catch(() => {});
@@ -242,9 +250,18 @@ export default function EditorPage() {
       setBusy(mode === "face" ? `Locking onto the face in ${clip.name}…` : `Reading the motion in ${clip.name}…`);
       const v = await getVideo(clip.id);
       if (!v) throw new Error("Clip missing from storage");
+      // Several faces in frame → let the user pick WHO to follow first
+      if (mode === "face" && !near) {
+        const faces = await detectFacesAt(v.blob);
+        if (faces.length >= 2) {
+          setFaceChoices({ clipId: clip.id, faces });
+          setBusy(null);
+          return;
+        }
+      }
       const res =
         mode === "face"
-          ? await trackFace(v.blob, { onProgress: (f) => setBusy(`Locking onto the face… ${Math.round(f * 100)}%`) })
+          ? await trackFace(v.blob, { near, onProgress: (f) => setBusy(`Locking onto the face… ${Math.round(f * 100)}%`) })
           : await trackAction(v.blob, { onProgress: (f) => setBusy(`Reading the motion… ${Math.round(f * 100)}%`) });
       if (!res.path) {
         throw new Error(
@@ -334,6 +351,79 @@ export default function EditorPage() {
       setToolsFor(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Background removal failed on this clip");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Watermark removal: the user picks the corner it sits in; FFmpeg's delogo
+  // interpolates the box away and a NEW derived clip is added.
+  async function handleRemoveWatermark(clip: UserClip, corner: "tl" | "tr" | "bl" | "br") {
+    setError(null);
+    try {
+      setBusy(`Removing the ${corner.toUpperCase()} watermark from ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const dims = await new Promise<{ w: number; h: number }>((res, rej) => {
+        const el = document.createElement("video");
+        el.preload = "metadata";
+        el.muted = true;
+        el.onloadedmetadata = () => res({ w: el.videoWidth, h: el.videoHeight });
+        el.onerror = () => rej(new Error("Couldn't read clip dimensions"));
+        el.src = URL.createObjectURL(v.blob);
+      });
+      const region = {
+        x: corner === "tl" || corner === "bl" ? 0.02 : 0.66,
+        y: corner === "tl" || corner === "tr" ? 0.03 : 0.85,
+        w: 0.32,
+        h: 0.12,
+      };
+      const blob = await removeWatermark(v.blob, region, dims);
+      const id = uuid();
+      const name = `${clip.name.replace(/\.[a-z0-9]+$/i, "")} · clean`;
+      let thumbnail: string | undefined;
+      try {
+        thumbnail = await makeThumbnail(blob);
+      } catch {
+        // stripes placeholder is fine
+      }
+      await saveVideo(id, blob, name);
+      const derived: UserClip = { id, name, duration: clip.duration, thumbnail };
+      await saveClipMeta(derived);
+      addClip(derived);
+      setToolsFor(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Watermark removal failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Quick draft preview: the cut at 360p with the heavy filters skipped —
+  // seconds instead of minutes, for checking rhythm before the real render.
+  async function handleDraftPreview() {
+    if (!plan) return;
+    setError(null);
+    try {
+      setBusy("Drafting a quick preview…");
+      const blobs = new Map<string, Blob>();
+      for (const id of new Set(plan.segments.map((s) => s.clipId))) {
+        const v = await getVideo(id);
+        if (v) blobs.set(id, v.blob);
+      }
+      const lookBySegment = new Map<string, string>();
+      for (const s of plan.segments) if (s.look) lookBySegment.set(s.id, s.look);
+      const out = await renderEdit(blobs, plan.segments, {
+        colorGrade: plan.colorGrade,
+        look: { ...studio.look, grade: studio.look.grade === "none" ? plan.colorGrade : studio.look.grade },
+        lookBySegment: lookBySegment.size > 0 ? lookBySegment : undefined,
+        draft: true,
+        onProgress: (pct, msg) => setBusy(`Draft ${pct}% — ${msg}`),
+      });
+      if (draftUrl) URL.revokeObjectURL(draftUrl);
+      setDraftUrl(URL.createObjectURL(out));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Draft preview failed");
     } finally {
       setBusy(null);
     }
@@ -867,6 +957,16 @@ export default function EditorPage() {
       if (motionBySegment.size > 0) featureNotes.push(`Auto Ken Burns on ${motionBySegment.size} static shot${motionBySegment.size > 1 ? "s" : ""}.`);
       setTasteNotes([...taste.report.changes, ...featureNotes]);
 
+      // virtual-set plates for keyed clips using a "vset:*" background, and
+      // per-segment grade overrides (section looks)
+      const chromaBgImages = new Map<string, Blob>();
+      for (const c of chromaByClip.values()) {
+        if (isVirtualSet(c.bg) && !chromaBgImages.has(c.bg)) chromaBgImages.set(c.bg, await renderVirtualSet(c.bg));
+      }
+      const lookBySegment = new Map<string, string>();
+      for (const s of plan2.segments) if (s.look) lookBySegment.set(s.id, s.look);
+      if (lookBySegment.size > 0) featureNotes.push(`Section looks on ${lookBySegment.size} shot${lookBySegment.size > 1 ? "s" : ""}.`);
+
       const out = await renderEdit(blobs, plan2.segments, {
         colorGrade: plan2.colorGrade,
         look: { ...studio2.look, grade: studio2.look.grade === "none" ? plan2.colorGrade : studio2.look.grade },
@@ -876,6 +976,8 @@ export default function EditorPage() {
         reframeByClip,
         trackByClip: trackByClip.size > 0 ? trackByClip : undefined,
         chromaByClip: chromaByClip.size > 0 ? chromaByClip : undefined,
+        chromaBgImages: chromaBgImages.size > 0 ? chromaBgImages : undefined,
+        lookBySegment: lookBySegment.size > 0 ? lookBySegment : undefined,
         punchBySegment: punchBySegment.size > 0 ? punchBySegment : undefined,
         music: finalAudio,
         captions: burnCaptions.length ? burnCaptions : undefined,
@@ -1040,6 +1142,48 @@ export default function EditorPage() {
                 )}
               </div>
 
+              {faceChoices && faceChoices.clipId === tc.id && (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">
+                    {faceChoices.faces.length} faces found — follow which one?
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {faceChoices.faces.map((f, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleTrackToggle(tc, "face", { cx: f.cx, cy: f.cy })}
+                        disabled={!!busy}
+                        className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-300"
+                      >
+                        {f.cx < 0.4 ? "Left" : f.cx > 0.6 ? "Right" : "Center"} face
+                      </button>
+                    ))}
+                    <button onClick={() => setFaceChoices(null)} className="rounded-full px-2 py-1 text-xs text-neutral-600">
+                      cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">Remove a corner watermark</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(["tl", "tr", "bl", "br"] as const).map((corner) => (
+                    <button
+                      key={corner}
+                      onClick={() => handleRemoveWatermark(tc, corner)}
+                      disabled={!!busy}
+                      className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400"
+                    >
+                      {{ tl: "Top left", tr: "Top right", bl: "Bottom left", br: "Bottom right" }[corner]}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[10px] text-neutral-600">
+                  Interpolates a corner box away (delogo) into a new clean copy of the clip.
+                </p>
+              </div>
+
               {tc.chroma && (
                 <div className="mt-3">
                   <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">
@@ -1051,6 +1195,7 @@ export default function EditorPage() {
                       { id: "blur", label: "Blur (bokeh)" },
                       { id: "#ffffff", label: "White" },
                       { id: "#0b1e3a", label: "Deep blue" },
+                      ...VIRTUAL_SETS.map((v) => ({ id: v.id, label: v.label })),
                     ].map((b) => (
                       <button
                         key={b.id}
@@ -1134,6 +1279,7 @@ export default function EditorPage() {
       </section>
 
       <StudioPanel />
+      <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
 
       {/* Timeline */}
       {plan && (
@@ -1177,6 +1323,34 @@ export default function EditorPage() {
                 </div>
               );
             })}
+          </div>
+
+          {/* Section looks: adjustment-layer-style grade override per shot */}
+          <div className="mt-1 flex items-center gap-1 overflow-x-auto pb-1">
+            <span className="shrink-0 text-[10px] text-neutral-600">Shot looks:</span>
+            {plan.segments.map((seg, i) => (
+              <select
+                key={seg.id}
+                value={seg.look ?? ""}
+                onChange={(e) =>
+                  setPlan({
+                    ...plan,
+                    segments: plan.segments.map((s) => (s.id === seg.id ? { ...s, look: e.target.value || undefined } : s)),
+                  })
+                }
+                aria-label={`Look for shot ${i + 1}`}
+                className="shrink-0 rounded border border-card-border bg-black px-1 py-0.5 text-[10px] text-neutral-400"
+              >
+                <option value="">S{i + 1}: Studio</option>
+                {Object.keys(COLOR_GRADES)
+                  .filter((g) => g !== "none")
+                  .map((g) => (
+                    <option key={g} value={g}>
+                      S{i + 1}: {g}
+                    </option>
+                  ))}
+              </select>
+            ))}
           </div>
 
           {/* Music */}
@@ -1366,6 +1540,31 @@ export default function EditorPage() {
           >
             Render my edit →
           </button>
+          <button
+            onClick={handleDraftPreview}
+            disabled={!!busy}
+            className="mt-2 w-full rounded-full border border-card-border py-2.5 text-sm text-neutral-300 disabled:opacity-40"
+          >
+            ⚡ Quick draft preview (360p, skips the slow filters)
+          </button>
+          {draftUrl && (
+            <div className="mt-3 rounded-xl border border-card-border p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs font-semibold text-neutral-400">Draft preview — the cut only, not final quality</span>
+                <button
+                  onClick={() => {
+                    URL.revokeObjectURL(draftUrl);
+                    setDraftUrl(null);
+                  }}
+                  className="p-1 text-neutral-500"
+                  aria-label="Close draft preview"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <video src={draftUrl} controls playsInline className="mx-auto max-h-72 rounded-lg" />
+            </div>
+          )}
           <InsightsPanel />
         </section>
       )}

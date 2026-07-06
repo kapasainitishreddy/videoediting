@@ -121,11 +121,13 @@ export function chromaBgHex(c: ChromaSettings): string {
 //  coreChain: trim,setpts,speed,(track|reframe),scale,crop,fps — NO look
 //  postChain: normalize,look,format=yuv420p — applied to the composite
 //  durSec: composite duration (color source needs an explicit duration)
+//  size: output frame (color source must match the fg; draft renders shrink)
 export function chromaComplex(
   c: ChromaSettings,
   coreChain: string,
   postChain: string,
-  durSec: number
+  durSec: number,
+  size: { w: number; h: number } = { w: 720, h: 1280 }
 ): string {
   const key = chromaKeyFilter(c);
   const post = postChain ? `,${postChain}` : "";
@@ -140,7 +142,25 @@ export function chromaComplex(
   }
   const bgHex = hexToFFmpeg(chromaBgHex(c));
   return (
-    `color=c=${bgHex}:s=720x1280:r=30:d=${Math.max(0.2, durSec).toFixed(2)}[bg];` +
+    `color=c=${bgHex}:s=${size.w}x${size.h}:r=30:d=${Math.max(0.2, durSec).toFixed(2)}[bg];` +
+    `[0:v]${coreChain},${key}[fg];` +
+    `[bg][fg]overlay=0:0:shortest=1${post}[v]`
+  );
+}
+
+// Filter_complex for an IMAGE background (virtual set): the still is input
+// [1:v] (fed with -loop 1), scaled to cover the frame behind the keyed
+// subject. Used by the render client for "vset:*" backgrounds.
+export function chromaImageBgComplex(
+  c: ChromaSettings,
+  coreChain: string,
+  postChain: string,
+  size: { w: number; h: number } = { w: 720, h: 1280 }
+): string {
+  const key = chromaKeyFilter(c);
+  const post = postChain ? `,${postChain}` : "";
+  return (
+    `[1:v]scale=${size.w}:${size.h}:force_original_aspect_ratio=increase,crop=${size.w}:${size.h},setsar=1[bg];` +
     `[0:v]${coreChain},${key}[fg];` +
     `[bg][fg]overlay=0:0:shortest=1${post}[v]`
   );

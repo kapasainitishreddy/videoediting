@@ -1,0 +1,441 @@
+// Unit suite for the competitor-parity feature libs (pure TS, no browser).
+// Run: node --experimental-strip-types scripts/features-test.mjs
+import { strict as assert } from "node:assert";
+import { toTimecode, edlFromPlan, fcpxmlFromPlan, projectToFile, projectFromFile } from "../src/lib/edl.ts";
+import { parseCube, generateCube, applyLut, gradeToCube, GRADE_TRANSFORMS } from "../src/lib/lut.ts";
+import {
+  subtractRanges, tightenSilences, insertCutaways, activeSpeakerCut, longformClips,
+} from "../src/lib/plan-surgery.ts";
+import { hookLines, showNotes } from "../src/lib/creator-growth.ts";
+import { scoreFrame, pickThumbCandidates } from "../src/lib/thumb-score.ts";
+import { readAudioTags, assessCopyrightRisk, attributionText, licenseAudit } from "../src/lib/media-trust.ts";
+import { estimateLufs, platformGain, PLATFORM_TARGETS } from "../src/lib/platform-audio.ts";
+import { foleyCues } from "../src/lib/foley.ts";
+import {
+  frameSignature, averageSignatures, signatureSimilarity, findSimilar, matchesAttribute, searchByAttributes,
+} from "../src/lib/similarity.ts";
+import { parseWhisperWords, fillerRanges, wordCutRanges, transcriptLines } from "../src/lib/transcript-edit.ts";
+import { chromaComplex, chromaImageBgComplex, DEFAULT_CHROMA } from "../src/lib/chroma.ts";
+
+let passed = 0;
+let failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(`  ✗ ${name}\n    ${e.message}`);
+  }
+}
+
+// --- fixtures --------------------------------------------------------------
+
+const CLIPS = [
+  { id: "a", name: "talk.mp4", duration: 20 },
+  { id: "b", name: "broll.mp4", duration: 8 },
+];
+const PLAN = {
+  segments: [
+    { id: "s1", clipId: "a", start: 1, end: 6, transitionAfter: "fade", speed: 1 },
+    { id: "s2", clipId: "b", start: 0.5, end: 3.5, transitionAfter: "hard-cut", speed: 2 },
+    { id: "s3", clipId: "a", start: 8, end: 11, transitionAfter: null, speed: 1 },
+  ],
+  colorGrade: "warm",
+  aiDirection: "punchy",
+  explanation: "test plan",
+};
+
+// solid RGBA frame builder
+function solid(w, h, [r, g, b]) {
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
+  }
+  return d;
+}
+
+// minimal ID3v2.3 buffer with given text frames
+function id3(frames) {
+  const chunks = [];
+  for (const [id, text] of frames) {
+    const body = [0, ...[...text].map((c) => c.charCodeAt(0))];
+    chunks.push([...[...id].map((c) => c.charCodeAt(0)), (body.length >> 24) & 255, (body.length >> 16) & 255, (body.length >> 8) & 255, body.length & 255, 0, 0, ...body]);
+  }
+  const payload = chunks.flat();
+  const size = payload.length;
+  return new Uint8Array([
+    0x49, 0x44, 0x33, 3, 0, 0,
+    (size >> 21) & 0x7f, (size >> 14) & 0x7f, (size >> 7) & 0x7f, size & 0x7f,
+    ...payload,
+  ]);
+}
+
+// --- EDL / FCPXML / project file ------------------------------------------------
+
+console.log("\nedl.ts");
+test("toTimecode formats frames at 30fps", () => {
+  assert.equal(toTimecode(0), "00:00:00:00");
+  assert.equal(toTimecode(1.5), "00:00:01:15");
+  assert.equal(toTimecode(3661.0333, 30), "01:01:01:01");
+});
+// the app passes transitionByType-based durations; tests inject their own
+const DISSOLVE = (t) => (t === "fade" ? 0.45 : 0);
+test("EDL has one event per segment with FROM CLIP NAME", () => {
+  const edl = edlFromPlan(PLAN, CLIPS, { dissolve: DISSOLVE });
+  assert.match(edl, /TITLE:/);
+  assert.match(edl, /FCM: NON-DROP FRAME/);
+  assert.equal((edl.match(/^\d{3} {2}AX/gm) ?? []).length, 3);
+  assert.match(edl, /FROM CLIP NAME: talk\.mp4/);
+  assert.match(edl, /FROM CLIP NAME: broll\.mp4/);
+});
+test("EDL: fade-in becomes a D event, speed emits M2", () => {
+  const edl = edlFromPlan(PLAN, CLIPS, { dissolve: DISSOLVE });
+  assert.match(edl, /002 {2}AX {7}V {5}D/); // s1's fade leads into event 2
+  assert.match(edl, /M2 {3}AX/); // s2 runs at 2x
+});
+test("FCPXML: one asset per used clip, timeMap on retimed segment", () => {
+  const xml = fcpxmlFromPlan(PLAN, CLIPS);
+  assert.match(xml, /<fcpxml version="1.9">/);
+  assert.equal((xml.match(/<asset /g) ?? []).length, 2);
+  assert.equal((xml.match(/<asset-clip /g) ?? []).length, 3);
+  assert.match(xml, /<timeMap>/);
+});
+test("project file round-trips and validates", () => {
+  const text = projectToFile({ blueprint: null, plan: PLAN, studio: { look: {} }, clips: CLIPS, exportedAt: 123 });
+  const res = projectFromFile(text);
+  assert.equal(res.ok, true);
+  assert.equal(res.project.plan.segments.length, 3);
+  assert.equal(res.project.clips[0].name, "talk.mp4");
+  assert.equal(projectFromFile("{}").ok, false);
+  assert.equal(projectFromFile("not json").ok, false);
+});
+
+// --- LUT ---------------------------------------------------------------------------
+
+console.log("\nlut.ts");
+test("generateCube → parseCube round-trip", () => {
+  const text = generateCube("Test", (r, g, b) => [r, g, b], 5);
+  const res = parseCube(text);
+  assert.equal(res.ok, true);
+  assert.equal(res.lut.size, 5);
+  assert.equal(res.lut.title, "Test");
+});
+test("identity LUT leaves colors unchanged", () => {
+  const res = parseCube(generateCube("I", (r, g, b) => [r, g, b], 9));
+  const [r, g, b] = applyLut(res.lut, 0.3, 0.6, 0.9);
+  assert.ok(Math.abs(r - 0.3) < 0.01 && Math.abs(g - 0.6) < 0.01 && Math.abs(b - 0.9) < 0.01);
+});
+test("warm grade lifts red, drops blue", () => {
+  const res = parseCube(gradeToCube("warm").text);
+  assert.equal(res.ok, true);
+  const [r, , b] = applyLut(res.lut, 0.5, 0.5, 0.5);
+  assert.ok(r > 0.5, `red ${r} should rise`);
+  assert.ok(b < 0.5, `blue ${b} should drop`);
+});
+test("parseCube rejects malformed input", () => {
+  assert.equal(parseCube("hello").ok, false);
+  assert.equal(parseCube("LUT_3D_SIZE 4\n0 0 0").ok, false); // wrong count
+  assert.equal(parseCube("LUT_1D_SIZE 4").ok, false);
+});
+test("unknown grade bakes an identity LUT (never fails)", () => {
+  const res = parseCube(gradeToCube("nonexistent").text);
+  assert.equal(res.ok, true);
+  const [r] = applyLut(res.lut, 0.42, 0.42, 0.42);
+  assert.ok(Math.abs(r - 0.42) < 0.01);
+});
+test("every signature grade transform stays in gamut", () => {
+  for (const [k, t] of Object.entries(GRADE_TRANSFORMS)) {
+    for (const v of [0, 0.5, 1]) {
+      const out = t.fn(v, v, v);
+      assert.ok(out.every((c) => c >= 0 && c <= 1), `${k} out of gamut at ${v}`);
+    }
+  }
+});
+
+// --- plan surgery ---------------------------------------------------------------------
+
+console.log("\nplan-surgery.ts");
+test("subtractRanges splits and drops slivers", () => {
+  const out = subtractRanges({ start: 0, end: 10 }, [{ start: 2, end: 3 }, { start: 9.9, end: 10 }]);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[0], { start: 0, end: 2 });
+  assert.deepEqual(out[1], { start: 3, end: 9.9 });
+});
+test("tightenSilences jump-cuts dead air, keeps final transition", () => {
+  const silences = new Map([["a", [{ start: 2.5, end: 4.5 }]]]);
+  const res = tightenSilences(PLAN, silences);
+  assert.ok(res.removedSeconds > 1.4, `removed ${res.removedSeconds}`);
+  const pieces = res.plan.segments.filter((s) => s.id.startsWith("s1"));
+  assert.equal(pieces.length, 2);
+  assert.equal(pieces[0].transitionAfter, "hard-cut");
+  assert.equal(pieces[1].transitionAfter, "fade");
+  assert.equal(res.plan.segments[res.plan.segments.length - 1].transitionAfter, null);
+});
+test("tightenSilences leaves untouched clips alone", () => {
+  const res = tightenSilences(PLAN, new Map());
+  assert.equal(res.removedSeconds, 0);
+  assert.equal(res.plan.segments.length, 3);
+});
+test("insertCutaways preserves duration and uses B-roll once", () => {
+  const before = PLAN.segments.reduce((s, x) => s + (x.end - x.start) / x.speed, 0);
+  const res = insertCutaways(
+    PLAN,
+    [{ clipId: "a", at: 3 }, { clipId: "a", at: 9.5 }],
+    [{ clipId: "b", start: 4, end: 7 }],
+    { len: 1 }
+  );
+  assert.equal(res.inserted, 1);
+  const after = res.plan.segments.reduce((s, x) => s + (x.end - x.start) / x.speed, 0);
+  assert.ok(Math.abs(before - after) < 0.05, `duration drifted ${before} → ${after}`);
+  const broll = res.plan.segments.find((s) => s.id.endsWith("_broll"));
+  assert.equal(broll.clipId, "b");
+});
+test("activeSpeakerCut follows the louder camera with hysteresis", () => {
+  const times = Array.from({ length: 40 }, (_, i) => i * 0.5);
+  const camA = times.map((t) => (t < 10 ? 0.2 : 0.01));
+  const camB = times.map((t) => (t < 10 ? 0.01 : 0.2));
+  const res = activeSpeakerCut([
+    { clipId: "camA", times, rms: camA },
+    { clipId: "camB", times, rms: camB },
+  ]);
+  assert.equal(res.segments.length, 2);
+  assert.equal(res.segments[0].clipId, "camA");
+  assert.equal(res.segments[1].clipId, "camB");
+  assert.ok(Math.abs(res.segments[0].end - 10) < 1.5, `switch at ${res.segments[0].end}`);
+});
+test("activeSpeakerCut refuses single-camera input", () => {
+  const res = activeSpeakerCut([{ clipId: "x", times: [0, 1], rms: [0.1, 0.1] }]);
+  assert.equal(res.segments.length, 0);
+});
+test("longformClips returns ranked non-overlapping windows", () => {
+  const n = 240; // 240 samples over 120s
+  const times = Array.from({ length: n }, (_, i) => i * 0.5);
+  const motion = times.map((t) => (t > 30 && t < 52 ? 0.3 : t > 80 && t < 102 ? 0.18 : 0.02));
+  const brightness = times.map(() => 0.5);
+  const out = longformClips({ duration: 120, times, motion, brightness }, { clipLen: 20, count: 3 });
+  assert.ok(out.length >= 2);
+  assert.equal(out[0].score, 100);
+  assert.ok(out[0].start > 25 && out[0].start < 40, `best window at ${out[0].start}`);
+  for (let i = 1; i < out.length; i++) assert.ok(out[i].score <= out[i - 1].score);
+});
+
+// --- creator growth --------------------------------------------------------------------
+
+console.log("\ncreator-growth.ts");
+test("hookLines: one line per pattern, topic substituted", () => {
+  const hooks = hookLines("fitness", undefined, 3);
+  assert.equal(hooks.length, 5);
+  assert.ok(hooks.some((h) => h.line.includes("training")));
+  assert.ok(new Set(hooks.map((h) => h.pattern)).size === 5);
+});
+test("hookLines deterministic per seed, changes across seeds", () => {
+  const a = hookLines("travel", undefined, 1).map((h) => h.line).join("|");
+  const b = hookLines("travel", undefined, 1).map((h) => h.line).join("|");
+  assert.equal(a, b);
+});
+test("showNotes assembles chapters, tags and attribution", () => {
+  const md = showNotes({
+    plan: PLAN,
+    clips: CLIPS,
+    chapters: "0:00 intro\n0:05 payoff",
+    hashtags: ["fyp", "#edit"],
+    attribution: "• Song by X (CC BY 4.0)",
+  });
+  assert.match(md, /## Chapters/);
+  assert.match(md, /#fyp #edit/);
+  assert.match(md, /CC BY 4\.0/);
+  assert.match(md, /on-device/);
+});
+
+// --- thumbnails --------------------------------------------------------------------------
+
+console.log("\nthumb-score.ts");
+test("a lit face frame outscores a dark empty frame", () => {
+  const face = scoreFrame({ t: 1, brightness: 0.5, contrast: 0.2, saturation: 0.2, sharpness: 0.12, faceSize: 0.25, faceOffCenter: 0.1 });
+  const dark = scoreFrame({ t: 2, brightness: 0.05, contrast: 0.05, saturation: 0.03, sharpness: 0.02, faceSize: 0, faceOffCenter: 1 });
+  assert.ok(face.score > dark.score + 30, `${face.score} vs ${dark.score}`);
+  assert.ok(face.reasons.some((r) => r.includes("face")));
+});
+test("pickThumbCandidates enforces time spacing", () => {
+  const stats = [1, 1.2, 1.4, 5, 9].map((t) => ({ t, brightness: 0.5, contrast: 0.2, saturation: 0.2, sharpness: 0.12, faceSize: 0.2, faceOffCenter: 0.1 }));
+  const picks = pickThumbCandidates(stats, 3, 1.0);
+  assert.equal(picks.length, 3);
+  const ts = picks.map((p) => p.t).sort((a, b) => a - b);
+  for (let i = 1; i < ts.length; i++) assert.ok(ts[i] - ts[i - 1] >= 1.0);
+});
+
+// --- media trust -----------------------------------------------------------------------------
+
+console.log("\nmedia-trust.ts");
+test("ID3v2 TCOP tag → high risk", () => {
+  const bytes = id3([["TIT2", "Hit Song"], ["TPE1", "Big Artist"], ["TCOP", "2024 Label Inc"]]);
+  const tags = readAudioTags(bytes);
+  assert.equal(tags.title, "Hit Song");
+  assert.equal(tags.copyright, "2024 Label Inc");
+  assert.equal(assessCopyrightRisk(tags).level, "high");
+});
+test("artist+title without rights tags → caution", () => {
+  const risk = assessCopyrightRisk(readAudioTags(id3([["TIT2", "Song"], ["TPE1", "Artist"]])));
+  assert.equal(risk.level, "caution");
+});
+test("untagged audio → unknown, still warns about fingerprinting", () => {
+  const risk = assessCopyrightRisk(readAudioTags(new Uint8Array(300)));
+  assert.equal(risk.level, "unknown");
+  assert.match(risk.detail, /fingerprint/i);
+});
+test("ID3v1 tail parses as fallback", () => {
+  const buf = new Uint8Array(300);
+  const tag = "TAG" + "Old Title".padEnd(30, "\0") + "Old Artist".padEnd(30, "\0");
+  for (let i = 0; i < tag.length; i++) buf[buf.length - 128 + i] = tag.charCodeAt(i);
+  const tags = readAudioTags(buf);
+  assert.equal(tags.title, "Old Title");
+  assert.equal(tags.artist, "Old Artist");
+});
+test("attribution: CC-BY assets demand credits", () => {
+  const text = attributionText([
+    { id: "1", name: "Track", kind: "music", source: "openverse", license: "CC BY 4.0", author: "Ann" },
+  ]);
+  assert.match(text, /REQUIRE attribution/);
+  assert.match(text, /Track by Ann/);
+});
+test("licenseAudit flags missing license and author", () => {
+  const audit = licenseAudit([
+    { id: "1", name: "Mystery", kind: "music", source: "?", license: "unknown" },
+    { id: "2", name: "CCThing", kind: "image", source: "web", license: "CC BY 4.0" },
+  ]);
+  assert.equal(audit.ok, false);
+  assert.equal(audit.warnings.length, 2);
+});
+
+// --- platform audio -----------------------------------------------------------------------------
+
+console.log("\nplatform-audio.ts");
+test("estimateLufs tracks 20log10(rms)", () => {
+  assert.ok(Math.abs(estimateLufs(0.1) - -20.7) < 0.2);
+  assert.equal(estimateLufs(0), -70);
+});
+test("quiet track gets boosted toward -14 LUFS", () => {
+  const g = platformGain({ rms: 0.02, peak: 0.05 }, "tiktok"); // ample peak headroom
+  assert.ok(g.gainDb > 15, `gain ${g.gainDb}`);
+  assert.ok(!g.limited);
+});
+test("peak ceiling caps the boost", () => {
+  const g = platformGain({ rms: 0.02, peak: 0.9 }, "tiktok");
+  assert.ok(g.limited);
+  assert.ok(g.gainDb < 1.2, `gain ${g.gainDb} should be peak-capped`);
+});
+test("all platform targets are sane", () => {
+  for (const p of PLATFORM_TARGETS) assert.ok(p.lufs <= -10 && p.lufs >= -30 && p.peak <= 0);
+});
+
+// --- foley ----------------------------------------------------------------------------------------
+
+console.log("\nfoley.ts");
+test("sharp spike → impact, respects spacing", () => {
+  const times = Array.from({ length: 30 }, (_, i) => i * 0.2);
+  const motion = times.map((t) => (Math.abs(t - 2) < 0.11 ? 0.5 : 0.02));
+  const cues = foleyCues(motion, times);
+  assert.ok(cues.some((c) => c.kind === "impact" && Math.abs(c.t - 2) < 0.3));
+});
+test("late build → riser", () => {
+  const times = Array.from({ length: 30 }, (_, i) => i * 0.2);
+  const motion = times.map((t) => (t < 4 ? 0.02 : 0.25));
+  const cues = foleyCues(motion, times);
+  assert.ok(cues.some((c) => c.kind === "riser"));
+});
+test("static footage produces no cues", () => {
+  const times = Array.from({ length: 20 }, (_, i) => i * 0.2);
+  assert.equal(foleyCues(times.map(() => 0.01), times).length, 0);
+});
+
+// --- similarity --------------------------------------------------------------------------------------
+
+console.log("\nsimilarity.ts");
+test("identical frames → similarity ≈ 1; opposite → lower", () => {
+  const red = { clipId: "r", ...frameSignature(solid(24, 24, [200, 30, 30]), 24, 24), avgMotion: 0.05 };
+  const red2 = { clipId: "r2", ...frameSignature(solid(24, 24, [200, 30, 30]), 24, 24), avgMotion: 0.05 };
+  const blue = { clipId: "b", ...frameSignature(solid(24, 24, [20, 30, 220]), 24, 24), avgMotion: 0.05 };
+  assert.ok(signatureSimilarity(red, red2) > 0.99);
+  assert.ok(signatureSimilarity(red, blue) < signatureSimilarity(red, red2));
+  const ranked = findSimilar(red, [red, red2, blue]);
+  assert.equal(ranked[0].clipId, "r2");
+});
+test("attribute filters classify bright/dark/colorful", () => {
+  const bright = { clipId: "w", ...frameSignature(solid(16, 16, [230, 230, 230]), 16, 16), avgMotion: 0.01 };
+  const dark = { clipId: "d", ...frameSignature(solid(16, 16, [15, 15, 20]), 16, 16), avgMotion: 0.2 };
+  assert.ok(matchesAttribute(bright, "bright"));
+  assert.ok(!matchesAttribute(bright, "dark"));
+  assert.ok(matchesAttribute(dark, "dark"));
+  assert.ok(matchesAttribute(dark, "high-action"));
+  assert.deepEqual(searchByAttributes([bright, dark], ["dark", "high-action"]), ["d"]);
+});
+test("averageSignatures blends frames", () => {
+  const avg = averageSignatures([frameSignature(solid(8, 8, [0, 0, 0]), 8, 8), frameSignature(solid(8, 8, [255, 255, 255]), 8, 8)]);
+  assert.ok(Math.abs(avg.layout[0] - 0.5) < 0.01);
+});
+
+// --- transcript edit -------------------------------------------------------------------------------------
+
+console.log("\ntranscript-edit.ts");
+const WORDS = [
+  { word: "So", start: 0.0, end: 0.2 },
+  { word: "um", start: 0.5, end: 0.7 },
+  { word: "this", start: 0.8, end: 1.0 },
+  { word: "is", start: 1.05, end: 1.15 },
+  { word: "you", start: 1.5, end: 1.6 },
+  { word: "know", start: 1.62, end: 1.8 },
+  { word: "great", start: 2.4, end: 2.8 },
+];
+test("parseWhisperWords handles top-level and segment shapes", () => {
+  assert.equal(parseWhisperWords({ words: WORDS }).length, 7);
+  assert.equal(parseWhisperWords({ segments: [{ words: WORDS.slice(0, 3) }, { words: WORDS.slice(3) }] }).length, 7);
+  assert.equal(parseWhisperWords({}).length, 0);
+});
+test("fillerRanges catches um + you know, spares real words", () => {
+  const f = fillerRanges(parseWhisperWords({ words: WORDS }));
+  assert.equal(f.length, 2);
+  assert.equal(f[0].text.toLowerCase(), "um");
+  assert.equal(f[1].text, "you know");
+});
+test("isolated 'like' counts, mid-sentence 'like' doesn't", () => {
+  const iso = parseWhisperWords({ words: [
+    { word: "I", start: 0, end: 0.1 },
+    { word: "like", start: 0.6, end: 0.8 }, // pauses both sides
+    { word: "trains", start: 1.4, end: 1.7 },
+  ] });
+  assert.equal(fillerRanges(iso).length, 1);
+  const mid = parseWhisperWords({ words: [
+    { word: "I", start: 0, end: 0.1 },
+    { word: "like", start: 0.12, end: 0.3 },
+    { word: "trains", start: 0.32, end: 0.6 },
+  ] });
+  assert.equal(fillerRanges(mid).length, 0);
+});
+test("wordCutRanges merges neighbors and pads", () => {
+  const cuts = wordCutRanges([WORDS[4], WORDS[5], WORDS[1]].map((w) => ({ w: w.word, start: w.start, end: w.end })));
+  assert.equal(cuts.length, 2);
+  assert.ok(cuts[0].start < 0.5 && cuts[0].end > 0.7);
+  assert.ok(cuts[1].start < 1.5 && cuts[1].end > 1.8);
+});
+test("transcriptLines breaks on pauses", () => {
+  const lines = transcriptLines(parseWhisperWords({ words: WORDS }), 9);
+  assert.ok(lines.length >= 2, `got ${lines.length} lines`);
+});
+
+// --- chroma additions ---------------------------------------------------------------------------------------
+
+console.log("\nchroma.ts (new)");
+test("chromaComplex honors a custom output size", () => {
+  const fc = chromaComplex({ ...DEFAULT_CHROMA, color: "#00ff00", bg: "studio" }, "scale=360:640", "", 1, { w: 360, h: 640 });
+  assert.match(fc, /s=360x640/);
+});
+test("chromaImageBgComplex scales the [1:v] plate to cover", () => {
+  const fc = chromaImageBgComplex({ ...DEFAULT_CHROMA, color: "#00ff00", bg: "vset:studio-glow" }, "scale=720:1280", "format=yuv420p", { w: 720, h: 1280 });
+  assert.match(fc, /\[1:v\]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280/);
+  assert.match(fc, /\[bg\]\[fg\]overlay/);
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);

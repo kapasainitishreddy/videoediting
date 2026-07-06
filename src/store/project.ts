@@ -7,6 +7,7 @@ import { DEFAULT_LOOK, type LookConfig } from "@/lib/cinematic";
 import type { MotionEffect } from "@/lib/motion";
 import type { OverlayType } from "@/lib/overlays";
 import type { ScoreMood } from "@/lib/audio-cinema";
+import type { AssetLicense } from "@/lib/media-trust";
 
 // Everything the Cinematic Studio panel controls, passed into renderEdit.
 export interface StudioConfig {
@@ -54,6 +55,11 @@ interface ProjectState {
   // IndexedDB by the export page (see storage.ts saveRenderedVideo).
   renderedUrl: string | null;
   studio: StudioConfig;
+  // License/attribution tracker: every third-party asset (CC music, stock
+  // images…) gets a record here so attribution text writes itself.
+  assets: AssetLicense[];
+  addAsset: (a: AssetLicense) => void;
+  removeAsset: (id: string) => void;
   setBlueprint: (bp: EditBlueprint | null) => void;
   setClips: (clips: UserClip[]) => void;
   addClip: (clip: UserClip) => void;
@@ -81,6 +87,9 @@ export const useProject = create<ProjectState>()(
       progress: null,
       renderedUrl: null,
       studio: DEFAULT_STUDIO,
+      assets: [],
+      addAsset: (a) => set((s) => ({ assets: [...s.assets.filter((x) => x.id !== a.id), a] })),
+      removeAsset: (id) => set((s) => ({ assets: s.assets.filter((x) => x.id !== id) })),
       setBlueprint: (blueprint) => set({ blueprint }),
       setClips: (clips) => set({ clips }),
       addClip: (clip) => set((s) => ({ clips: [...s.clips, clip] })),
@@ -102,7 +111,7 @@ export const useProject = create<ProjectState>()(
       setRenderedUrl: (renderedUrl) => set({ renderedUrl }),
       setStudio: (patch) => set((s) => ({ studio: { ...s.studio, ...patch } })),
       resetProject: () =>
-        set({ blueprint: null, clips: [], plan: null, planHistory: [], renderedUrl: null, studio: DEFAULT_STUDIO }),
+        set({ blueprint: null, clips: [], plan: null, planHistory: [], renderedUrl: null, studio: DEFAULT_STUDIO, assets: [] }),
     }),
     {
       name: "viraledit-session",
@@ -115,6 +124,7 @@ export const useProject = create<ProjectState>()(
         plan: s.plan,
         planHistory: s.planHistory,
         studio: s.studio,
+        assets: s.assets,
       }),
     }
   )

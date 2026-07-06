@@ -112,4 +112,29 @@ export const TASK_PROMPTS: Record<string, string> = {
   "compile-direction": COMPILE_DIRECTION_PROMPT,
   // Vision (or text) niche classification; normalizeNiche clamps to taxonomy.
   "classify-niche": CLASSIFY_NICHE_PROMPT,
+  // Multi-language caption pack: translate burned-caption lines while keeping
+  // line count and energy. normalizeTranslations() clamps the shape.
+  "translate-captions": `You are a subtitle localizer for short-form video. You receive {"lines": string[], "languages": string[]} — caption lines from a vertical video and target language codes (e.g. "es", "pt-BR", "hi", "ja"). Translate each line into each language, keeping the SAME number of lines, the same energy (short, punchy, spoken register — not literal word-for-word), and any emoji. Respond with ONLY a JSON object, no prose, no markdown fences: {"translations":[{"lang":string,"lines":string[]}]}`,
 };
+
+// Clamp a translate-captions reply: only requested languages, line counts
+// forced to match the source (truncate or pad with the original line).
+export function normalizeTranslations(
+  raw: unknown,
+  sourceLines: string[],
+  languages: string[]
+): { lang: string; lines: string[] }[] {
+  const o = (raw ?? {}) as { translations?: { lang?: string; lines?: unknown[] }[] };
+  const wanted = new Set(languages);
+  const out: { lang: string; lines: string[] }[] = [];
+  for (const t of Array.isArray(o.translations) ? o.translations : []) {
+    const lang = typeof t.lang === "string" ? t.lang.slice(0, 10) : "";
+    if (!wanted.has(lang) || out.some((x) => x.lang === lang)) continue;
+    const lines = (Array.isArray(t.lines) ? t.lines : [])
+      .map((l) => (typeof l === "string" ? l.slice(0, 200) : ""))
+      .slice(0, sourceLines.length);
+    while (lines.length < sourceLines.length) lines.push(sourceLines[lines.length]);
+    out.push({ lang, lines });
+  }
+  return out;
+}

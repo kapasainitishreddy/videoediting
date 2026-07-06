@@ -38,6 +38,9 @@ export async function POST(req: NextRequest) {
   upstream.append("file", file, "audio.mp3");
   upstream.append("model", "whisper-1");
   upstream.append("response_format", "verbose_json");
+  // Edit-by-transcript needs per-word timing; segment lines stay the default
+  const wantWords = form?.get("words") === "1";
+  if (wantWords) upstream.append("timestamp_granularities[]", "word");
 
   try {
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -57,7 +60,15 @@ export async function POST(req: NextRequest) {
           text: String(s.text || "").trim(),
         }))
       : [];
-    return Response.json({ available: true, lines: segments, text: String(data.text ?? "") });
+    const words: { word: string; start: number; end: number }[] =
+      wantWords && Array.isArray(data.words)
+        ? data.words.map((w: { word: string; start: number; end: number }) => ({
+            word: String(w.word ?? "").trim(),
+            start: Number(w.start) || 0,
+            end: Number(w.end) || 0,
+          }))
+        : [];
+    return Response.json({ available: true, lines: segments, words, text: String(data.text ?? "") });
   } catch (err) {
     return Response.json({ available: true, error: `Transcription failed: ${String(err).slice(0, 150)}` }, { status: 502 });
   }

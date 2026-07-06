@@ -12,8 +12,9 @@
 // the middle.
 import { useEffect, useState } from "react";
 import { getFFmpeg } from "@/lib/ffmpeg-client";
-import { chromaComplex, DEFAULT_CHROMA } from "@/lib/chroma";
+import { chromaComplex, chromaImageBgComplex, DEFAULT_CHROMA } from "@/lib/chroma";
 import { trackCropFilter, facePunchFilter, type TrackPath } from "@/lib/track-core";
+import { generateCube } from "@/lib/lut";
 
 // A plausible smoothed face path: drifts left→right over 2s in a 16:9 frame
 const PATH: TrackPath = {
@@ -96,7 +97,54 @@ export default function SubjectProbe() {
         "-frames:v", "8", "-y", "o.mp4",
       ]);
 
-      // 6. PIXEL check: key green over blue, dump 1 frame as PNG, verify the
+      // 6. delogo — the watermark-removal filter
+      await run("delogo", [
+        "-i", "land.mp4",
+        "-vf", "delogo=x=12:y=12:w=120:h=48",
+        "-frames:v", "5", "-y", "o.mp4",
+      ]);
+
+      // 7. lut3d — apply a generated .cube (the LUT import path)
+      try {
+        const cube = generateCube("Probe Warm", (cr, cg, cb) => [Math.min(1, cr * 1.1), cg, cb * 0.9], 9);
+        await ff.writeFile("probe.cube", new TextEncoder().encode(cube));
+        await run("lut3d", ["-i", "land.mp4", "-vf", "lut3d=probe.cube", "-frames:v", "5", "-y", "o.mp4"]);
+        await ff.deleteFile("probe.cube");
+      } catch (e) {
+        report("lut3d", "throw:" + String(e).slice(0, 60));
+      }
+
+      // 8. virtual set: keyed subject over an image plate ([1:v] input)
+      try {
+        const c = document.createElement("canvas");
+        c.width = 320;
+        c.height = 568;
+        const cx = c.getContext("2d")!;
+        const g = cx.createLinearGradient(0, 0, 0, 568);
+        g.addColorStop(0, "#17181d");
+        g.addColorStop(1, "#0c0c10");
+        cx.fillStyle = g;
+        cx.fillRect(0, 0, 320, 568);
+        const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), "image/png"));
+        await ff.writeFile("plate.png", new Uint8Array(await png.arrayBuffer()));
+        const fc = chromaImageBgComplex(
+          { ...DEFAULT_CHROMA, color: "#00ff00", bg: "vset:studio-glow" },
+          "scale=320:568,fps=15",
+          "format=yuv420p",
+          { w: 320, h: 568 }
+        );
+        await run("vset_image_bg", [
+          "-i", "green.mp4",
+          "-loop", "1", "-i", "plate.png",
+          "-filter_complex", fc,
+          "-map", "[v]", "-frames:v", "5", "-y", "o.mp4",
+        ]);
+        await ff.deleteFile("plate.png");
+      } catch (e) {
+        report("vset_image_bg", "throw:" + String(e).slice(0, 60));
+      }
+
+      // 9. PIXEL check: key green over blue, dump 1 frame as PNG, verify the
       // corner turned blue (green gone) and the red box survived.
       try {
         const fc = chromaComplex({ ...DEFAULT_CHROMA, color: "#00ff00", bg: "#0000ff" }, "scale=320:568", "format=yuv420p", 1);

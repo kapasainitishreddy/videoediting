@@ -15,7 +15,7 @@ import { transitionByType, COLOR_GRADES } from "./transitions";
 import { buildLookFilter, DEFAULT_LOOK, type LookConfig } from "./cinematic";
 import { motionFilter, type MotionEffect } from "./motion";
 import { trackCropFilter, facePunchFilter, type TrackPath } from "./track-core";
-import { chromaComplex, type ChromaSettings } from "./chroma";
+import { chromaComplex, chromaImageBgComplex, type ChromaSettings } from "./chroma";
 
 // FFmpeg WASM may return views over SharedArrayBuffer; copy into a plain
 // ArrayBuffer so Blob accepts it.
@@ -153,6 +153,12 @@ export interface RenderOptions {
   trackByClip?: Map<string, TrackPath>; // face/action lock — animated follow crop
   chromaByClip?: Map<string, ChromaSettings>; // green-screen key + background
   punchBySegment?: Map<string, { cx: number; cy: number }>; // face punch-in target
+  chromaBgImages?: Map<string, Blob>; // "vset:*" background plates, keyed by bg id
+  lookBySegment?: Map<string, string>; // per-segment grade override (adjustment sections)
+  // Draft mode: 360×640, higher CRF, and the slow overscan filters (zoompan
+  // punch-ins / Ken Burns) plus caption/atmosphere passes are skipped — a
+  // fast cut preview, not the final picture.
+  draft?: boolean;
   music?: Blob;
   captions?: BurnCaption[]; // captions, titles, lower thirds, credits, kinetic
   overlay?: { blob: Blob; opacity: number }; // atmosphere layer (blend=screen)
@@ -179,6 +185,10 @@ export async function renderEdit(
   const ff = await getFFmpeg();
   const gradeFilter = COLOR_GRADES[look.grade]?.filter ?? COLOR_GRADES[opts.colorGrade ?? ""]?.filter ?? "";
   const lookFilter = buildLookFilter(look, gradeFilter);
+  const draft = opts.draft ?? false;
+  const OW = draft ? 360 : 720;
+  const OH = draft ? 640 : 1280;
+  const CRF = draft ? "32" : "26";
 
   // 1. Write + normalize every segment to 720x1280 (9:16) so xfade works
   const segFiles: { file: string; duration: number }[] = [];
@@ -194,15 +204,23 @@ export async function renderEdit(
     const effect = opts.motionBySegment?.get(seg.id) ?? opts.motionDefault ?? "none";
     // face punch-in beats the generic motion effect for this segment
     const punch = opts.punchBySegment?.get(seg.id);
-    const m = punch ? facePunchFilter(punch, segDur) : motionFilter(effect, segDur);
+    let m = punch && !draft ? facePunchFilter(punch, segDur) : motionFilter(effect, segDur);
+    // draft renders skip the overscan filters (zoompan is the slowest thing
+    // in WASM) — the point of a draft is checking the CUT, fast
+    if (draft && m.needsOverscan) m = motionFilter("none", segDur);
     // face/action lock (animated follow crop) wins over the static reframe
     const track = opts.trackByClip?.get(seg.clipId);
     const trackCrop = track ? trackCropFilter(track, { start: seg.start, end: seg.end, speed: seg.speed }) : "";
     const reframe = trackCrop || (opts.reframeByClip?.get(seg.clipId) ?? "");
     const normalize = opts.normalizeByClip?.get(seg.clipId) ?? "";
+    // per-segment grade override (section looks) wins over the global look
+    const segGrade = opts.lookBySegment?.get(seg.id);
+    const segLookFilter = segGrade
+      ? buildLookFilter({ ...look, grade: segGrade }, COLOR_GRADES[segGrade]?.filter ?? "")
+      : lookFilter;
     const scaling = m.needsOverscan
       ? [m.pre, m.post]
-      : [m.pre, "scale=720:1280:force_original_aspect_ratio=increase", "crop=720:1280"];
+      : [m.pre, `scale=${OW}:${OH}:force_original_aspect_ratio=increase`, `crop=${OW}:${OH}`];
     const chroma = opts.chromaByClip?.get(seg.clipId);
     if (chroma) {
       // keyed clip: composite person over the background, THEN grade
@@ -214,13 +232,27 @@ export async function renderEdit(
         ...scaling,
         "fps=30",
       ].filter(Boolean).join(",");
-      const postChain = [normalize, lookFilter, "format=yuv420p"].filter(Boolean).join(",");
-      const fc = chromaComplex(chroma, coreChain, postChain, segDur);
-      await ff.exec([
-        "-i", `src_${i}.mp4`,
-        "-filter_complex", fc,
-        "-map", "[v]", "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`,
-      ]);
+      const postChain = [normalize, segLookFilter, "format=yuv420p"].filter(Boolean).join(",");
+      const vsetImage = chroma.bg.startsWith("vset:") ? opts.chromaBgImages?.get(chroma.bg) : undefined;
+      if (vsetImage) {
+        // virtual set: the still plate is input [1:v], looped behind the key
+        await ff.writeFile(`vset_${i}.png`, await fetchFile(vsetImage));
+        const fc = chromaImageBgComplex(chroma, coreChain, postChain, { w: OW, h: OH });
+        await ff.exec([
+          "-i", `src_${i}.mp4`,
+          "-loop", "1", "-i", `vset_${i}.png`,
+          "-filter_complex", fc,
+          "-map", "[v]", "-an", "-preset", "ultrafast", "-crf", CRF, `seg_${i}.mp4`,
+        ]);
+        await ff.deleteFile(`vset_${i}.png`).catch(() => {});
+      } else {
+        const fc = chromaComplex(chroma, coreChain, postChain, segDur, { w: OW, h: OH });
+        await ff.exec([
+          "-i", `src_${i}.mp4`,
+          "-filter_complex", fc,
+          "-map", "[v]", "-an", "-preset", "ultrafast", "-crf", CRF, `seg_${i}.mp4`,
+        ]);
+      }
     } else {
       const vf = [
         `trim=start=${seg.start}:end=${seg.end}`,
@@ -230,11 +262,11 @@ export async function renderEdit(
         ...scaling,
         "fps=30",
         normalize,
-        lookFilter,
+        segLookFilter,
         "format=yuv420p",
       ].filter(Boolean).join(",");
 
-      await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`]);
+      await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", "-crf", CRF, `seg_${i}.mp4`]);
     }
     await ff.deleteFile(`src_${i}.mp4`);
     const outDur = (seg.end - seg.start) / seg.speed;
@@ -242,7 +274,7 @@ export async function renderEdit(
   }
 
   if (segFiles.length === 1) {
-    return finalize(ff, segFiles[0].file, music, captions, opts.overlay, onProgress);
+    return finalize(ff, segFiles[0].file, music, draft ? undefined : captions, draft ? undefined : opts.overlay, onProgress);
   }
 
   // 2. Chain xfades left-to-right
@@ -274,7 +306,56 @@ export async function renderEdit(
   }
 
   for (const s of segFiles) await ff.deleteFile(s.file).catch(() => {});
-  return finalize(ff, current, music, captions, opts.overlay, onProgress);
+  return finalize(ff, current, music, draft ? undefined : captions, draft ? undefined : opts.overlay, onProgress);
+}
+
+// Remove a watermark / logo from a clip: the user draws a box, FFmpeg's
+// delogo interpolates the region away from its surroundings. Region is
+// normalized 0..1 in source coordinates; a new clip blob comes back.
+export async function removeWatermark(
+  video: Blob,
+  region: { x: number; y: number; w: number; h: number },
+  srcSize: { w: number; h: number },
+  onProgress?: (p: number) => void
+): Promise<Blob> {
+  const ff = await getFFmpeg(onProgress);
+  await ff.writeFile("wm_in.mp4", await fetchFile(video));
+  // delogo needs ≥1px of frame border around the box
+  const px = (v: number, span: number, lo: number, hi: number) => Math.round(Math.max(lo, Math.min(hi, v * span)));
+  const x = px(region.x, srcSize.w, 1, srcSize.w - 4);
+  const y = px(region.y, srcSize.h, 1, srcSize.h - 4);
+  const w = px(region.w, srcSize.w, 4, srcSize.w - x - 1);
+  const h = px(region.h, srcSize.h, 4, srcSize.h - y - 1);
+  const code = await ff.exec([
+    "-i", "wm_in.mp4",
+    "-vf", `delogo=x=${x}:y=${y}:w=${w}:h=${h}`,
+    "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", "-y", "wm_out.mp4",
+  ]);
+  await ff.deleteFile("wm_in.mp4").catch(() => {});
+  if (code !== 0) throw new Error("Watermark removal failed on this clip");
+  const data = await ff.readFile("wm_out.mp4");
+  await ff.deleteFile("wm_out.mp4").catch(() => {});
+  return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
+}
+
+// Apply an imported .cube LUT to a clip via the WASM core's lut3d filter.
+// Returns null (not an error) if this build lacks lut3d — the caller falls
+// back to canvas preview and says so.
+export async function applyCubeToClip(video: Blob, cubeText: string): Promise<Blob | null> {
+  const ff = await getFFmpeg();
+  await ff.writeFile("lut_in.mp4", await fetchFile(video));
+  await ff.writeFile("user.cube", new TextEncoder().encode(cubeText));
+  const code = await ff.exec([
+    "-i", "lut_in.mp4",
+    "-vf", "lut3d=user.cube",
+    "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", "-y", "lut_out.mp4",
+  ]);
+  await ff.deleteFile("lut_in.mp4").catch(() => {});
+  await ff.deleteFile("user.cube").catch(() => {});
+  if (code !== 0) return null;
+  const data = await ff.readFile("lut_out.mp4");
+  await ff.deleteFile("lut_out.mp4").catch(() => {});
+  return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
 }
 
 // Composite atmosphere overlay, burn caption PNGs, lay music under the cut.

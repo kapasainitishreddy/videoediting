@@ -38,7 +38,7 @@ export const FEATURES: Feature[] = [
   { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "roadmap", where: "needs getUserMedia recording UI" },
   { group: "Direction & Coaching", name: "Reshoot comparison score", status: "roadmap", where: "builds on clip-analysis" },
   { group: "Direction & Coaching", name: "Undo history for edits", status: "working", where: "Editor → undo (up to 20 steps)" },
-  { group: "Direction & Coaching", name: "Portable project export", status: "roadmap", where: "blueprint codes cover the recipe today" },
+  { group: "Direction & Coaching", name: "Portable project export/import (.viraledit.json)", status: "working", where: "Editor → Pro Tools → Handoff" },
 
   // ---------- Color & grading ----------
   { group: "Color & Grading", name: "7 color grades", status: "working", where: "Studio → Look & Grade" },
@@ -49,6 +49,8 @@ export const FEATURES: Feature[] = [
   { group: "Color & Grading", name: "Day-for-night simulation", status: "working", where: "Studio → Day-for-night" },
   { group: "Color & Grading", name: "Golden hour simulation", status: "working", where: "Studio → Golden hour warmth" },
   { group: "Color & Grading", name: "Auto white-balance correction", status: "working", where: "part of auto color match" },
+  { group: "Color & Grading", name: "Import a .cube LUT onto a clip (lut3d)", status: "working", where: "Editor → Pro Tools → Handoff" },
+  { group: "Color & Grading", name: "Section looks — per-shot grade override", status: "working", where: "Timeline → Shot looks row" },
 
   // ---------- Camera & motion ----------
   { group: "Camera & Motion", name: "Ken Burns / virtual dolly", status: "working", where: "Studio → Camera Motion → Push/Pull" },
@@ -67,6 +69,9 @@ export const FEATURES: Feature[] = [
   { group: "AI Subject Tools", name: "Auto punch-in on faces (CapCut-style auto zoom)", status: "working", where: "Studio → Camera Motion → Auto punch-in on faces" },
   { group: "AI Subject Tools", name: "AI background removal (selfie segmentation)", status: "working", where: "Clip card → face icon → Remove background" },
   { group: "AI Subject Tools", name: "Green screen / chroma key with auto color detect", status: "working", where: "Clip card → face icon → Green screen" },
+  { group: "AI Subject Tools", name: "Multi-face picker — choose WHO the lock follows", status: "working", where: "Face lock on a clip with several faces" },
+  { group: "AI Subject Tools", name: "Virtual set backgrounds (5 procedural plates)", status: "working", where: "Green screen → backdrop chips" },
+  { group: "AI Subject Tools", name: "Watermark / logo removal (corner delogo)", status: "working", where: "Clip card → face icon → Remove a corner watermark" },
 
   // ---------- Composition ----------
   { group: "Composition", name: "Composition score + tips", status: "working", where: "motion.compositionScore — surfacing UI soon" },
@@ -145,8 +150,13 @@ export const FEATURES: Feature[] = [
   { group: "Smart Cutting", name: "Highlight-reel distiller for long clips", status: "working", where: "Editor → ⚡ Distill on any clip over 25s" },
   { group: "Smart Cutting", name: "Auto black-bar strip (baked-in letterbox/pillarbox)", status: "working", where: "automatic at clip upload" },
   { group: "Smart Cutting", name: "Repeat-take detector", status: "roadmap", where: "needs pairwise clip similarity pass" },
-  { group: "Smart Cutting", name: "Multi-cam sync via audio waveforms", status: "roadmap", where: "needs cross-correlation aligner" },
-  { group: "Smart Cutting", name: "Text-based editing / filler-word remover", status: "key", where: "needs Whisper word timestamps (OPENAI_API_KEY) — planned" },
+  { group: "Smart Cutting", name: "Multi-cam sync via audio waveforms", status: "roadmap", where: "speaker cut assumes cameras roll in parallel; auto-alignment needs a cross-correlation pass" },
+  { group: "Smart Cutting", name: "Text-based editing / filler-word remover", status: "key", where: "Editor → Pro Tools → Edit by Text (OPENAI_API_KEY)" },
+  { group: "Smart Cutting", name: "Jump-cut tightener (removes dead air)", status: "working", where: "Editor → Pro Tools → Cut Cleanup" },
+  { group: "Smart Cutting", name: "Auto B-roll cutaways at speech gaps", status: "working", where: "Editor → Pro Tools → Cut Cleanup" },
+  { group: "Smart Cutting", name: "Multi-cam active-speaker cut (energy diarization)", status: "working", where: "Editor → Pro Tools → Cut Cleanup" },
+  { group: "Smart Cutting", name: "Long recording → ranked short-clip candidates", status: "working", where: "Editor → Pro Tools → Long Recording" },
+  { group: "Smart Cutting", name: "Quick draft preview (360p, skips slow filters)", status: "working", where: "Editor → below Render" },
 
   // ---------- One-tap pipelines (v2 drop) ----------
   { group: "One-Tap Pipelines", name: "6 genre presets (Wedding, Travel, Fitness, Food, Gaming, Film Story)", status: "working", where: "Editor → preset chips above the prompt" },
@@ -178,13 +188,40 @@ export const FEATURES: Feature[] = [
   { group: "Branding & Distribution", name: "Best-frame thumbnail picker", status: "working", where: "Export → More formats → Thumbnail" },
   { group: "Branding & Distribution", name: "Caption + hashtag writer from your niche", status: "working", where: "Export → Post kit" },
   { group: "Branding & Distribution", name: "Chapter markers export", status: "working", where: "Export → Post kit → Copy chapters" },
-  { group: "Branding & Distribution", name: "Multi-language caption pack", status: "key", where: "needs a translation-capable key — planned" },
+  { group: "Branding & Distribution", name: "Multi-language caption pack", status: "key", where: "Editor → Pro Tools → Caption Translations (any AI key)" },
+  { group: "Branding & Distribution", name: "EDL export (CMX3600) for Premiere/Resolve", status: "working", where: "Editor → Pro Tools → Handoff" },
+  { group: "Branding & Distribution", name: "FCPXML export (Final Cut / Resolve)", status: "working", where: "Editor → Pro Tools → Handoff" },
+  { group: "Branding & Distribution", name: "Export the current grade as a .cube LUT", status: "working", where: "Editor → Pro Tools → Handoff" },
+  { group: "Branding & Distribution", name: "Thumbnail A/B — 3 scored candidates with reasons", status: "working", where: "Export → Thumbnail A/B" },
+  { group: "Branding & Distribution", name: "Multi-aspect crop preview grid", status: "working", where: "Export → More formats → Crop preview" },
+  { group: "Branding & Distribution", name: "Show notes / blog post from the edit", status: "working", where: "Export → Post kit → Show notes" },
+  { group: "Branding & Distribution", name: "Read post copy aloud (accessibility review)", status: "working", where: "Export → Post kit → Read it aloud" },
+
+  // ---------- Rights & trust ----------
+  { group: "Rights & Trust", name: "Music copyright check before export (tag scan, honest about not fingerprinting)", status: "working", where: "Editor → Pro Tools → Audio & Rights" },
+  { group: "Rights & Trust", name: "License & attribution tracker with auto-credits", status: "working", where: "Editor → Pro Tools · Export → Licenses" },
+  { group: "Rights & Trust", name: "CC stock music search (Openverse, keyless)", status: "working", where: "Editor → Pro Tools → Audio & Rights" },
+
+  // ---------- Pro audio ----------
+  { group: "Pro Audio", name: "Studio sound — one-tap voice cleanup (gate + EQ + compression)", status: "working", where: "Editor → Pro Tools → Audio & Rights" },
+  { group: "Pro Audio", name: "Platform loudness targets (TikTok/YT/podcast LUFS)", status: "working", where: "Editor → Pro Tools → Audio & Rights" },
+  { group: "Pro Audio", name: "AI voiceover narration (text → speech)", status: "key", where: "Editor → Pro Tools → AI Voiceover (MINIMAX_API_KEY)" },
+  { group: "Pro Audio", name: "Procedural foley cues from motion energy", status: "working", where: "foley.foleyCues — surfacing UI soon" },
+
+  // ---------- Creator growth ----------
+  { group: "Creator Growth", name: "Hook writer — niche-tuned opening lines with the why", status: "working", where: "Editor → Pro Tools → Hook Writer" },
+  { group: "Creator Growth", name: "Visual similar-shot search across your library", status: "working", where: "Editor → Pro Tools → Find Similar Shots" },
 
   // ---------- Honest roadmap (needs models/backends this stack doesn't have) ----------
   { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "face tracker is in — blur render path planned" },
   { group: "Needs ML Models", name: "Split-screen / PiP reaction layouts", status: "roadmap", where: "needs hstack/vstack probe + layout UI" },
   { group: "Needs ML Models", name: "Beauty smoothing / eye-contact correction", status: "roadmap", where: "needs face models" },
-  { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a sharing backend" },
+  { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a realtime backend — project files + share codes cover handoff today" },
+  { group: "Needs ML Models", name: "Live shared cursors (Figma-style co-editing)", status: "roadmap", where: "needs a realtime sync backend + accounts — deliberately absent from the local-first core" },
+  { group: "Needs ML Models", name: "Team workspace with roles + shared library", status: "roadmap", where: "needs accounts + cloud storage; the portable project file is the handoff today" },
+  { group: "Needs ML Models", name: "Direct in-app upload to TikTok/YouTube", status: "roadmap", where: "needs platform OAuth apps — the OS share sheet covers mobile posting today" },
+  { group: "Needs ML Models", name: "AI dubbing (translated voiceover, timed)", status: "roadmap", where: "translation + TTS both exist — the re-timing/mux pipeline is planned" },
+  { group: "Needs ML Models", name: "Freeform object removal (inpainting)", status: "roadmap", where: "corner delogo works today; arbitrary objects need an inpainting model" },
 ];
 
 export const featureCounts = () => {

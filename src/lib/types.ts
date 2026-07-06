@@ -96,6 +96,9 @@ export interface TimelineSegment {
   end: number; // trim end within source clip
   transitionAfter: TransitionType | null;
   speed: number; // 1 = normal
+  // Per-segment grade override (adjustment-layer-style section looks) —
+  // when set, this shot renders with this grade instead of the Studio's.
+  look?: string;
 }
 
 export interface EditPlan {

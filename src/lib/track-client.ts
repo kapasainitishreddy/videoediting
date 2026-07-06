@@ -111,12 +111,17 @@ const seekTo = (v: HTMLVideoElement, t: number) =>
 
 export async function trackFace(
   blob: Blob,
-  opts: { onProgress?: (frac: number) => void } = {}
+  opts: { onProgress?: (frac: number) => void; near?: { cx: number; cy: number } } = {}
 ): Promise<{ path: TrackPath | null; tier: FaceTier }> {
   const { v, url, duration } = await loadVideo(blob);
   try {
     const aspect = v.videoWidth / Math.max(1, v.videoHeight);
     const { tier, mp, native } = await pickFaceTier();
+    // multi-face: when the user picked a face, follow the detection nearest
+    // to the running anchor instead of the biggest one in frame
+    let anchor: { cx: number; cy: number } | null = opts.near ?? null;
+    const pickCost = (cand: { cx: number; cy: number; size: number }) =>
+      anchor ? Math.hypot(cand.cx - anchor.cx, cand.cy - anchor.cy) - cand.size * 0.15 : -cand.size;
 
     // ML tiers get a decent-res frame; the heuristic works at 64px
     const MLW = 256;
@@ -147,28 +152,30 @@ export async function trackFace(
           if (!bb) continue;
           const conf = d.categories[0]?.score ?? 0.5;
           const size = Math.max(bb.width / MLW, bb.height / mlH);
-          if (!best || size > best.size) {
-            best = { cx: (bb.originX + bb.width / 2) / MLW, cy: (bb.originY + bb.height / 2) / mlH, size, conf };
-          }
+          const cand = { cx: (bb.originX + bb.width / 2) / MLW, cy: (bb.originY + bb.height / 2) / mlH, size, conf };
+          if (!best || pickCost(cand) < pickCost(best)) best = cand;
         }
-        if (best) pt = { t, ...best };
+        if (best) {
+          pt = { t, ...best };
+          anchor = { cx: best.cx, cy: best.cy };
+        }
       } else if (tier === "native" && native) {
         mlCtx.drawImage(v, 0, 0, MLW, mlH);
         try {
           const faces = await native.detect(ml);
-          let best: NativeFaceDetection | null = null;
+          let best: { cx: number; cy: number; size: number } | null = null;
           for (const f of faces) {
-            if (!best || f.boundingBox.width > best.boundingBox.width) best = f;
-          }
-          if (best) {
-            const bb = best.boundingBox;
-            pt = {
-              t,
+            const bb = f.boundingBox;
+            const cand = {
               cx: (bb.x + bb.width / 2) / MLW,
               cy: (bb.y + bb.height / 2) / mlH,
               size: Math.max(bb.width / MLW, bb.height / mlH),
-              conf: 0.8,
             };
+            if (!best || pickCost(cand) < pickCost(best)) best = cand;
+          }
+          if (best) {
+            pt = { t, ...best, conf: 0.8 };
+            anchor = { cx: best.cx, cy: best.cy };
           }
         } catch {
           /* conf stays 0 */
@@ -236,6 +243,68 @@ export async function trackAction(
     }
 
     return { path: smoothTrack(points, "action", duration, aspect), tier: "motion" };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// List candidate faces near the start of a clip so the user can pick WHICH
+// person the lock should follow. Uses the same ML tiers; the heuristic tier
+// can only ever offer its single best blob.
+export async function detectFacesAt(
+  blob: Blob,
+  atFrac = 0.35
+): Promise<{ cx: number; cy: number; size: number }[]> {
+  const { v, url, duration } = await loadVideo(blob);
+  try {
+    const aspect = v.videoWidth / Math.max(1, v.videoHeight);
+    const { tier, mp, native } = await pickFaceTier();
+    const MLW = 256;
+    const mlH = Math.max(64, Math.round(MLW / aspect));
+    const c = document.createElement("canvas");
+    c.width = MLW;
+    c.height = mlH;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    await seekTo(v, Math.min(duration - 0.05, duration * atFrac));
+    ctx.drawImage(v, 0, 0, MLW, mlH);
+
+    const faces: { cx: number; cy: number; size: number }[] = [];
+    if (tier === "mediapipe" && mp) {
+      for (const d of mp.detect(c).detections) {
+        const bb = d.boundingBox;
+        if (!bb) continue;
+        faces.push({
+          cx: (bb.originX + bb.width / 2) / MLW,
+          cy: (bb.originY + bb.height / 2) / mlH,
+          size: Math.max(bb.width / MLW, bb.height / mlH),
+        });
+      }
+    } else if (tier === "native" && native) {
+      try {
+        for (const f of await native.detect(c)) {
+          const bb = f.boundingBox;
+          faces.push({
+            cx: (bb.x + bb.width / 2) / MLW,
+            cy: (bb.y + bb.height / 2) / mlH,
+            size: Math.max(bb.width / MLW, bb.height / mlH),
+          });
+        }
+      } catch {
+        /* fall through to heuristic below */
+      }
+    }
+    if (faces.length === 0) {
+      const HW = 64;
+      const hH = Math.max(16, Math.round(HW / aspect));
+      const hc = document.createElement("canvas");
+      hc.width = HW;
+      hc.height = hH;
+      const hctx = hc.getContext("2d", { willReadFrequently: true })!;
+      hctx.drawImage(v, 0, 0, HW, hH);
+      const f = detectFaceInFrame(hctx.getImageData(0, 0, HW, hH).data, HW, hH);
+      if (f) faces.push({ cx: f.cx, cy: f.cy, size: f.size });
+    }
+    return faces.filter((f) => f.size > 0.04).sort((a, b) => a.cx - b.cx);
   } finally {
     URL.revokeObjectURL(url);
   }
