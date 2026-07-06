@@ -14,6 +14,7 @@ export interface StudioConfig {
   motionDefault: MotionEffect;
   autoKenBurns: boolean; // virtual dolly on static shots
   autoReframe: boolean; // subject-aware 9:16 crop for landscape clips
+  autoFacePunch: boolean; // zoom-in punch targeted at the detected face
   overlay: OverlayType | null;
   overlayOpacity: number;
   scoreMood: ScoreMood | null; // compose an original score at this mood
@@ -29,6 +30,7 @@ export const DEFAULT_STUDIO: StudioConfig = {
   motionDefault: "none",
   autoKenBurns: false,
   autoReframe: false,
+  autoFacePunch: false,
   overlay: null,
   overlayOpacity: 0.5,
   scoreMood: null,
@@ -55,6 +57,7 @@ interface ProjectState {
   setBlueprint: (bp: EditBlueprint | null) => void;
   setClips: (clips: UserClip[]) => void;
   addClip: (clip: UserClip) => void;
+  updateClip: (id: string, patch: Partial<UserClip>) => void;
   removeClip: (id: string) => void;
   setPlan: (plan: EditPlan | null) => void;
   undoPlan: () => void;
@@ -81,6 +84,8 @@ export const useProject = create<ProjectState>()(
       setBlueprint: (blueprint) => set({ blueprint }),
       setClips: (clips) => set({ clips }),
       addClip: (clip) => set((s) => ({ clips: [...s.clips, clip] })),
+      updateClip: (id, patch) =>
+        set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
       removeClip: (id) => set((s) => ({ clips: s.clips.filter((c) => c.id !== id) })),
       setPlan: (plan) =>
         set((s) => ({

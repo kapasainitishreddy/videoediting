@@ -77,6 +77,16 @@ export interface UserClip {
   // FFmpeg crop filter that strips letterbox/pillarbox bars baked into the
   // source file (detected at upload, applied before reframe/scale at render)
   sourceCrop?: string;
+  // AI subject lock: the render crop follows the face (on-device ML face
+  // detection) or the motion energy. The path itself is computed at render
+  // time and cached in memory — only the intent persists here.
+  track?: "face" | "action" | null;
+  // Green-screen key detected on this clip. Kept structural (not the
+  // ChromaSettings import) like BlueprintNiche above; chroma.ts owns the
+  // canonical type and the two are assignment-compatible.
+  chroma?: { color: string; similarity: number; blend: number; bg: string } | null;
+  // True when this clip is a derived "background removed" copy of an upload
+  bgRemoved?: boolean;
 }
 
 export interface TimelineSegment {

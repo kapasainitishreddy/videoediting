@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Captions, Mic, Music, Plus, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Captions, Crosshair, Eraser, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit, getFFmpeg, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
@@ -21,6 +21,10 @@ import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
 import { GENRE_PRESETS, compilePreset, brandFilterFromHex } from "@/lib/creator-kit";
 import { counterCues, countdownCues, locationCard, progressBarCues, emojiCueTimes, emojiReactionCues, watermarkCue } from "@/lib/overlays-plus";
 import { distillWindows, detectBars } from "@/lib/clip-analysis";
+import { trackFace, trackAction, detectClipKeyColor } from "@/lib/track-client";
+import { pathCenter, mapToCenterCrop, type TrackPath } from "@/lib/track-core";
+import { DEFAULT_CHROMA, type ChromaSettings } from "@/lib/chroma";
+import { removeBackground } from "@/lib/segmenter";
 import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
 import { estimateRenderCost, renderCostMessage } from "@/lib/render-cost";
 import { withCredit } from "@/lib/wallet";
@@ -47,7 +51,7 @@ export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const musicRef = useRef<HTMLInputElement>(null);
-  const { blueprint, clips, setClips, addClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio, setStudio } = useProject();
+  const { blueprint, clips, setClips, addClip, updateClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio, setStudio } = useProject();
 
   const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
   const [beats, setBeats] = useState<BeatResult | null>(null);
@@ -67,6 +71,7 @@ export default function EditorPage() {
   const [renderPct, setRenderPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [pickerFor, setPickerFor] = useState<number | null>(null); // segment index
+  const [toolsFor, setToolsFor] = useState<string | null>(null); // clip id → AI tools card
   const [listening, setListening] = useState(false);
   const [tasteNotes, setTasteNotes] = useState<string[]>([]);
   // Tracks the last render stage so a mid-pipeline failure tells the user
@@ -87,6 +92,12 @@ export default function EditorPage() {
     analysisRef.current.set(id, a);
     return a;
   };
+  // Subject-track paths are expensive (a seek-heavy ML pass per clip) and
+  // clip bytes are immutable per id — cache by clipId + mode, like analysisRef.
+  // facePathsRef additionally remembers "tried, no face" (null) so auto
+  // punch-in never re-scans a faceless clip.
+  const trackPathsRef = useRef<Map<string, { mode: "face" | "action"; path: TrackPath }>>(new Map());
+  const facePathsRef = useRef<Map<string, TrackPath | null>>(new Map());
   const setStage = (msg: string) => {
     renderStageRef.current = msg;
     setBusy(msg);
@@ -209,7 +220,123 @@ export default function EditorPage() {
   async function handleRemoveClip(id: string) {
     removeClip(id);
     analysisRef.current.delete(id);
+    trackPathsRef.current.delete(id);
+    facePathsRef.current.delete(id);
+    if (toolsFor === id) setToolsFor(null);
     await Promise.all([deleteClipMeta(id), deleteVideo(id)]);
+  }
+
+  // ---- AI subject tools (per-clip, all on-device) --------------------------
+
+  // Face lock / Action lock: run the tracker NOW (instant feedback if there's
+  // no face / no motion to follow), cache the path, persist only the intent.
+  async function handleTrackToggle(clip: UserClip, mode: "face" | "action") {
+    setError(null);
+    if (clip.track === mode) {
+      trackPathsRef.current.delete(clip.id);
+      updateClip(clip.id, { track: null });
+      await saveClipMeta({ ...clip, track: null }).catch(() => {});
+      return;
+    }
+    try {
+      setBusy(mode === "face" ? `Locking onto the face in ${clip.name}…` : `Reading the motion in ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const res =
+        mode === "face"
+          ? await trackFace(v.blob, { onProgress: (f) => setBusy(`Locking onto the face… ${Math.round(f * 100)}%`) })
+          : await trackAction(v.blob, { onProgress: (f) => setBusy(`Reading the motion… ${Math.round(f * 100)}%`) });
+      if (!res.path) {
+        throw new Error(
+          mode === "face"
+            ? "Couldn't find a steady face in this clip — try Action lock instead."
+            : "Not enough motion in this clip to follow."
+        );
+      }
+      trackPathsRef.current.set(clip.id, { mode, path: res.path });
+      if (mode === "face") facePathsRef.current.set(clip.id, res.path);
+      updateClip(clip.id, { track: mode });
+      await saveClipMeta({ ...clip, track: mode }).catch(() => {});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Tracking failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Green screen: auto-detect the key color from the frame border. Refuses
+  // politely on normal footage instead of keying random greens.
+  async function handleChromaToggle(clip: UserClip) {
+    setError(null);
+    if (clip.chroma) {
+      updateClip(clip.id, { chroma: null });
+      await saveClipMeta({ ...clip, chroma: null }).catch(() => {});
+      return;
+    }
+    try {
+      setBusy(`Looking for a green/blue screen in ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const key = await detectClipKeyColor(v.blob);
+      if (!key) {
+        throw new Error(
+          "No solid green/blue backdrop found in this clip — green screen needs an even, saturated backdrop behind the subject."
+        );
+      }
+      const chroma = { ...DEFAULT_CHROMA, color: key.color };
+      updateClip(clip.id, { chroma });
+      await saveClipMeta({ ...clip, chroma }).catch(() => {});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Green screen detection failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function setChromaBg(clip: UserClip, bg: string) {
+    if (!clip.chroma) return;
+    const chroma = { ...clip.chroma, bg };
+    updateClip(clip.id, { chroma });
+    saveClipMeta({ ...clip, chroma }).catch(() => {});
+  }
+
+  // AI background removal: selfie segmentation plays the clip through a
+  // canvas once and records a NEW derived clip — the original stays intact.
+  async function handleRemoveBg(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Removing the background from ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const { blob } = await removeBackground(v.blob, {
+        bg: "blur",
+        onProgress: (f) => setBusy(`Removing the background… ${Math.round(f * 100)}% (plays the clip through once)`),
+      });
+      const id = uuid();
+      const name = `${clip.name.replace(/\.[a-z0-9]+$/i, "")} · no bg`;
+      let duration = clip.duration;
+      try {
+        const d = await probeDuration(blob);
+        if (Number.isFinite(d) && d > 0) duration = d;
+      } catch {
+        // MediaRecorder webm sometimes reports no duration — keep the source's
+      }
+      let thumbnail: string | undefined;
+      try {
+        thumbnail = await makeThumbnail(blob);
+      } catch {
+        // stripes placeholder is fine
+      }
+      await saveVideo(id, blob, name);
+      const derived: UserClip = { id, name, duration, thumbnail, bgRemoved: true };
+      await saveClipMeta(derived);
+      addClip(derived);
+      setToolsFor(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Background removal failed on this clip");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function handleAutoEdit() {
@@ -378,9 +505,12 @@ export default function EditorPage() {
       (Number.isFinite(parseInt(counter.from, 10)) && Number.isFinite(parseInt(counter.to, 10))
         ? Math.min(30, Math.abs(parseInt(counter.to, 10) - parseInt(counter.from, 10)) + 1)
         : 0);
-    const uniqueClips = new Set(plan.segments.map((s) => s.clipId)).size;
+    const usedIds = new Set(plan.segments.map((s) => s.clipId));
     return estimateRenderCost({
-      clipCount: uniqueClips,
+      clipCount: usedIds.size,
+      trackedClips: clips.filter((c) => usedIds.has(c.id) && c.track).length,
+      chromaClips: clips.filter((c) => usedIds.has(c.id) && c.chroma).length,
+      facePunchSegments: studio.autoFacePunch ? plan.segments.length : 0,
       segmentCount: plan.segments.length,
       grade: studio.look.grade,
       grain: studio.look.grain > 0,
@@ -399,7 +529,7 @@ export default function EditorPage() {
       music: !!music,
       captionCount,
     });
-  }, [plan, studio, captionText, locationText, counter, countdownIntro, progressBar, emojiReacts, watermark, music]);
+  }, [plan, studio, clips, captionText, locationText, counter, countdownIntro, progressBar, emojiReacts, watermark, music]);
 
   async function handleRender() {
     if (!plan) return;
@@ -567,6 +697,80 @@ export default function EditorPage() {
       }
       if (strippedBars > 0) featureNotes.push(`Stripped baked-in bars from ${strippedBars} clip${strippedBars > 1 ? "s" : ""}.`);
 
+      // AI subject locks: the crop FOLLOWS the face (ML face detection) or
+      // the motion. Paths are cached per clip; recompute after a reload.
+      const trackByClip = new Map<string, TrackPath>();
+      let faceLocks = 0, actionLocks = 0;
+      for (const [id, blob] of blobs) {
+        const mode = clips.find((c) => c.id === id)?.track;
+        if (!mode) continue;
+        const cached = trackPathsRef.current.get(id);
+        let path = cached && cached.mode === mode ? cached.path : null;
+        if (!path) {
+          setStage(mode === "face" ? "Locking onto the face…" : "Tracking the action…");
+          const res = mode === "face" ? await trackFace(blob) : await trackAction(blob);
+          path = res.path;
+          if (path) {
+            trackPathsRef.current.set(id, { mode, path });
+            if (mode === "face") facePathsRef.current.set(id, path);
+          }
+        }
+        if (path) {
+          trackByClip.set(id, path);
+          if (mode === "face") faceLocks++;
+          else actionLocks++;
+        }
+      }
+      if (faceLocks > 0) featureNotes.push(`Face lock: the crop follows the face in ${faceLocks} clip${faceLocks > 1 ? "s" : ""}.`);
+      if (actionLocks > 0) featureNotes.push(`Action lock: the crop follows the motion in ${actionLocks} clip${actionLocks > 1 ? "s" : ""}.`);
+
+      // Green screen keys detected on the clip cards
+      const chromaByClip = new Map<string, ChromaSettings>();
+      for (const id of blobs.keys()) {
+        const c = clips.find((cc) => cc.id === id);
+        if (c?.chroma) chromaByClip.set(id, c.chroma);
+      }
+      if (chromaByClip.size > 0) featureNotes.push(`Green screen keyed on ${chromaByClip.size} clip${chromaByClip.size > 1 ? "s" : ""}.`);
+
+      // Auto face punch-in: find the face in each shot and push the camera
+      // toward it. Skips short shots and back-to-back punches (taste), and
+      // shots where the face already fills the frame.
+      const punchBySegment = new Map<string, { cx: number; cy: number }>();
+      if (studio2.autoFacePunch) {
+        setStage("Finding faces to punch in on…");
+        const facePathFor = async (clipId: string): Promise<TrackPath | null> => {
+          if (facePathsRef.current.has(clipId)) return facePathsRef.current.get(clipId)!;
+          const blob = blobs.get(clipId);
+          if (!blob) return null;
+          const res = await trackFace(blob);
+          facePathsRef.current.set(clipId, res.path);
+          return res.path;
+        };
+        let prevPunched = false;
+        for (const seg of plan2.segments) {
+          const segDur = (seg.end - seg.start) / seg.speed;
+          if (segDur < 1.2 || prevPunched) {
+            prevPunched = false;
+            continue;
+          }
+          const path = await facePathFor(seg.clipId);
+          const c = path ? pathCenter(path, seg.start, seg.end) : null;
+          if (!c || c.size > 0.55) {
+            prevPunched = false;
+            continue; // no face, or already a close-up
+          }
+          // A face-locked clip is already centered by its follow crop; other
+          // footage needs the source cx remapped into the 9:16 center crop.
+          const faceLocked = clips.find((cc) => cc.id === seg.clipId)?.track === "face" && trackByClip.has(seg.clipId);
+          const cx = faceLocked ? 0.5 : mapToCenterCrop(c.cx, path!.aspect);
+          punchBySegment.set(seg.id, { cx, cy: c.cy });
+          prevPunched = true;
+        }
+        if (punchBySegment.size > 0) {
+          featureNotes.push(`Auto face punch-in on ${punchBySegment.size} shot${punchBySegment.size > 1 ? "s" : ""}.`);
+        }
+      }
+
       // Auto Ken Burns on static shots (#6)
       const motionBySegment = new Map<string, import("@/lib/motion").MotionEffect>();
       if (studio2.autoKenBurns) {
@@ -670,6 +874,9 @@ export default function EditorPage() {
         motionBySegment,
         normalizeByClip,
         reframeByClip,
+        trackByClip: trackByClip.size > 0 ? trackByClip : undefined,
+        chromaByClip: chromaByClip.size > 0 ? chromaByClip : undefined,
+        punchBySegment: punchBySegment.size > 0 ? punchBySegment : undefined,
         music: finalAudio,
         captions: burnCaptions.length ? burnCaptions : undefined,
         overlay,
@@ -731,6 +938,16 @@ export default function EditorPage() {
               >
                 <X size={12} />
               </button>
+              <button
+                onClick={() => setToolsFor(toolsFor === c.id ? null : c.id)}
+                className={`absolute -left-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full ${
+                  c.track || c.chroma ? "bg-accent text-white" : "bg-neutral-800 text-neutral-300"
+                } ${toolsFor === c.id ? "ring-2 ring-accent" : ""}`}
+                aria-label={`AI tools for ${c.name}`}
+                title="AI tools: face lock, action lock, green screen, remove background"
+              >
+                <ScanFace size={12} />
+              </button>
               <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 font-mono text-[10px]">
                 {c.duration.toFixed(1)}s
               </span>
@@ -762,6 +979,102 @@ export default function EditorPage() {
           hidden
           onChange={(e) => e.target.files && handleFiles(e.target.files)}
         />
+
+        {/* AI subject tools for the selected clip — face lock, action lock,
+            green screen key, background removal. All on-device ML. */}
+        {(() => {
+          const tc = clips.find((c) => c.id === toolsFor);
+          if (!tc) return null;
+          return (
+            <div className="card mt-3 p-4">
+              <div className="flex items-center justify-between">
+                <span className="flex min-w-0 items-center gap-2 text-sm font-bold">
+                  <ScanFace size={15} className="shrink-0 text-accent" />
+                  <span className="truncate">AI tools — {tc.name}</span>
+                </span>
+                <button onClick={() => setToolsFor(null)} aria-label="Close AI tools" className="p-1 text-neutral-500">
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => handleTrackToggle(tc, "face")}
+                  disabled={!!busy}
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${
+                    tc.track === "face" ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                  }`}
+                >
+                  <ScanFace size={12} /> Face lock
+                </button>
+                <button
+                  onClick={() => handleTrackToggle(tc, "action")}
+                  disabled={!!busy}
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${
+                    tc.track === "action" ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                  }`}
+                >
+                  <Crosshair size={12} /> Action lock
+                </button>
+                <button
+                  onClick={() => handleChromaToggle(tc)}
+                  disabled={!!busy}
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${
+                    tc.chroma ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                  }`}
+                >
+                  <span
+                    className="h-3 w-3 rounded-sm border border-black/30"
+                    style={{ background: tc.chroma?.color ?? "#22c55e" }}
+                  />
+                  Green screen
+                </button>
+                {!tc.bgRemoved && (
+                  <button
+                    onClick={() => handleRemoveBg(tc)}
+                    disabled={!!busy}
+                    className="flex items-center gap-1.5 rounded-full border border-card-border px-3 py-1.5 text-xs text-neutral-300"
+                  >
+                    <Eraser size={12} /> Remove background
+                  </button>
+                )}
+              </div>
+
+              {tc.chroma && (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">
+                    Keyed {tc.chroma.color} — replace it with
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: "studio", label: "Studio dark" },
+                      { id: "blur", label: "Blur (bokeh)" },
+                      { id: "#ffffff", label: "White" },
+                      { id: "#0b1e3a", label: "Deep blue" },
+                    ].map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => setChromaBg(tc, b.id)}
+                        className={`rounded-full px-3 py-1 text-xs ${
+                          tc.chroma?.bg === b.id ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-400"
+                        }`}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-3 text-[10px] leading-4 text-neutral-600">
+                {tc.track === "face" && "The 9:16 crop follows this face through the shot (on-device ML face detection). "}
+                {tc.track === "action" && "The 9:16 crop follows where the motion is. "}
+                {tc.bgRemoved && "This clip already has its background removed. "}
+                Everything runs on your device — no footage is uploaded.
+              </p>
+            </div>
+          );
+        })()}
       </section>
 
       {/* AI direction */}

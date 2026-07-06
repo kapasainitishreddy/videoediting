@@ -241,6 +241,12 @@ export default function StudioPanel() {
         <div className="mt-2">
           <Toggle label="Auto Ken Burns on static shots" value={studio.autoKenBurns} onChange={(v) => setStudio({ autoKenBurns: v })} />
           <Toggle label="Subject-aware reframe (landscape clips)" value={studio.autoReframe} onChange={(v) => setStudio({ autoReframe: v })} />
+          <Toggle label="Auto punch-in on faces" value={studio.autoFacePunch} onChange={(v) => setStudio({ autoFacePunch: v })} />
+          {studio.autoFacePunch && (
+            <p className="mt-1 text-[10px] text-neutral-600">
+              Finds the face in each shot (on-device ML) and zooms the camera toward it — CapCut-style auto zoom.
+            </p>
+          )}
         </div>
       </Section>
 

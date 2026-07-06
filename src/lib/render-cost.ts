@@ -29,6 +29,10 @@ export interface RenderCostInput {
   autoReframe: boolean;
   motionDefault: string; // "none" free; shake/drift/stabilize/ken-burns add
   emojiReactions: boolean;
+  // AI subject tools (optional so older callers/tests stay valid)
+  trackedClips?: number; // face/action lock — per-clip sampling pass
+  chromaClips?: number; // green-screen key — filter_complex composite
+  facePunchSegments?: number; // zoompan punch-ins targeted at faces
   // compositing
   overlay: boolean; // atmosphere blend layer
   scoreMood: boolean; // compose + mux
@@ -62,6 +66,9 @@ const W = {
   autoReframePerClip: 14, // motionCentroidX analysis
   emojiAnalysisPerClip: 22, // another analyzeClip pass
   motionPerSeg: 6, // shake/drift/stabilize per segment
+  trackAnalysisPerClip: 18, // face/action tracker sampling pass (seek-heavy)
+  chromaPerClip: 8, // chromakey + overlay composite via filter_complex
+  facePunchPerSeg: 26, // zoompan again — same worst-case filter as Ken Burns
   overlayBlend: 24, // generate overlay clip (real-time) + screen blend pass
   score: 8,
   musicLoudness: 4,
@@ -95,6 +102,9 @@ export function estimateRenderCost(i: RenderCostInput): RenderCostEstimate {
   if (i.motionDefault && i.motionDefault !== "none") {
     add(i.segmentCount * W.motionPerSeg, i.motionDefault === "stabilize" ? "stabilize" : `${i.motionDefault} motion`);
   }
+  if (i.trackedClips) add(i.trackedClips * W.trackAnalysisPerClip, "face/action lock");
+  if (i.chromaClips) add(i.chromaClips * W.chromaPerClip);
+  if (i.facePunchSegments) add(i.facePunchSegments * W.facePunchPerSeg, "face punch-ins");
   if (i.overlay) add(W.overlayBlend, "atmosphere layer");
   if (i.scoreMood) add(W.score);
   if (i.music) add(W.musicLoudness);

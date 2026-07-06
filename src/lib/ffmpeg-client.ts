@@ -14,6 +14,8 @@ import type { TimelineSegment } from "./types";
 import { transitionByType, COLOR_GRADES } from "./transitions";
 import { buildLookFilter, DEFAULT_LOOK, type LookConfig } from "./cinematic";
 import { motionFilter, type MotionEffect } from "./motion";
+import { trackCropFilter, facePunchFilter, type TrackPath } from "./track-core";
+import { chromaComplex, type ChromaSettings } from "./chroma";
 
 // FFmpeg WASM may return views over SharedArrayBuffer; copy into a plain
 // ArrayBuffer so Blob accepts it.
@@ -148,6 +150,9 @@ export interface RenderOptions {
   motionBySegment?: Map<string, MotionEffect>; // per-segment override
   normalizeByClip?: Map<string, string>; // per-clip WB/exposure filter
   reframeByClip?: Map<string, string>; // per-clip subject-crop filter
+  trackByClip?: Map<string, TrackPath>; // face/action lock — animated follow crop
+  chromaByClip?: Map<string, ChromaSettings>; // green-screen key + background
+  punchBySegment?: Map<string, { cx: number; cy: number }>; // face punch-in target
   music?: Blob;
   captions?: BurnCaption[]; // captions, titles, lower thirds, credits, kinetic
   overlay?: { blob: Blob; opacity: number }; // atmosphere layer (blend=screen)
@@ -187,25 +192,50 @@ export async function renderEdit(
     const speedFilter = seg.speed !== 1 ? `setpts=${(1 / seg.speed).toFixed(4)}*PTS` : "";
     const segDur = (seg.end - seg.start) / seg.speed;
     const effect = opts.motionBySegment?.get(seg.id) ?? opts.motionDefault ?? "none";
-    const m = motionFilter(effect, segDur);
-    const reframe = opts.reframeByClip?.get(seg.clipId) ?? "";
+    // face punch-in beats the generic motion effect for this segment
+    const punch = opts.punchBySegment?.get(seg.id);
+    const m = punch ? facePunchFilter(punch, segDur) : motionFilter(effect, segDur);
+    // face/action lock (animated follow crop) wins over the static reframe
+    const track = opts.trackByClip?.get(seg.clipId);
+    const trackCrop = track ? trackCropFilter(track, { start: seg.start, end: seg.end, speed: seg.speed }) : "";
+    const reframe = trackCrop || (opts.reframeByClip?.get(seg.clipId) ?? "");
     const normalize = opts.normalizeByClip?.get(seg.clipId) ?? "";
     const scaling = m.needsOverscan
       ? [m.pre, m.post]
       : [m.pre, "scale=720:1280:force_original_aspect_ratio=increase", "crop=720:1280"];
-    const vf = [
-      `trim=start=${seg.start}:end=${seg.end}`,
-      "setpts=PTS-STARTPTS",
-      speedFilter,
-      reframe,
-      ...scaling,
-      "fps=30",
-      normalize,
-      lookFilter,
-      "format=yuv420p",
-    ].filter(Boolean).join(",");
+    const chroma = opts.chromaByClip?.get(seg.clipId);
+    if (chroma) {
+      // keyed clip: composite person over the background, THEN grade
+      const coreChain = [
+        `trim=start=${seg.start}:end=${seg.end}`,
+        "setpts=PTS-STARTPTS",
+        speedFilter,
+        reframe,
+        ...scaling,
+        "fps=30",
+      ].filter(Boolean).join(",");
+      const postChain = [normalize, lookFilter, "format=yuv420p"].filter(Boolean).join(",");
+      const fc = chromaComplex(chroma, coreChain, postChain, segDur);
+      await ff.exec([
+        "-i", `src_${i}.mp4`,
+        "-filter_complex", fc,
+        "-map", "[v]", "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`,
+      ]);
+    } else {
+      const vf = [
+        `trim=start=${seg.start}:end=${seg.end}`,
+        "setpts=PTS-STARTPTS",
+        speedFilter,
+        reframe,
+        ...scaling,
+        "fps=30",
+        normalize,
+        lookFilter,
+        "format=yuv420p",
+      ].filter(Boolean).join(",");
 
-    await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`]);
+      await ff.exec(["-i", `src_${i}.mp4`, "-vf", vf, "-an", "-preset", "ultrafast", "-crf", "26", `seg_${i}.mp4`]);
+    }
     await ff.deleteFile(`src_${i}.mp4`);
     const outDur = (seg.end - seg.start) / seg.speed;
     segFiles.push({ file: `seg_${i}.mp4`, duration: outDur });

@@ -61,6 +61,13 @@ export const FEATURES: Feature[] = [
   { group: "Camera & Motion", name: "Match-cut detector", status: "working", where: "motion.matchCutPairs — surfacing UI soon" },
   { group: "Camera & Motion", name: "Motion-blur speed ramps (minterpolate)", status: "roadmap", where: "core supports it; too slow in WASM today" },
 
+  // ---------- AI subject tools (on-device ML — MediaPipe) ----------
+  { group: "AI Subject Tools", name: "Face lock — crop follows the face (MediaPipe, on-device)", status: "working", where: "Clip card → face icon → Face lock" },
+  { group: "AI Subject Tools", name: "Action lock — crop follows the motion", status: "working", where: "Clip card → face icon → Action lock" },
+  { group: "AI Subject Tools", name: "Auto punch-in on faces (CapCut-style auto zoom)", status: "working", where: "Studio → Camera Motion → Auto punch-in on faces" },
+  { group: "AI Subject Tools", name: "AI background removal (selfie segmentation)", status: "working", where: "Clip card → face icon → Remove background" },
+  { group: "AI Subject Tools", name: "Green screen / chroma key with auto color detect", status: "working", where: "Clip card → face icon → Green screen" },
+
   // ---------- Composition ----------
   { group: "Composition", name: "Composition score + tips", status: "working", where: "motion.compositionScore — surfacing UI soon" },
   { group: "Composition", name: "Cinema letterbox bars", status: "working", where: "Studio → letterbox toggle" },
@@ -174,8 +181,7 @@ export const FEATURES: Feature[] = [
   { group: "Branding & Distribution", name: "Multi-language caption pack", status: "key", where: "needs a translation-capable key — planned" },
 
   // ---------- Honest roadmap (needs models/backends this stack doesn't have) ----------
-  { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "needs a face-detection model" },
-  { group: "Needs ML Models", name: "Chroma key (green screen)", status: "roadmap", where: "chromakey filter unverified in the WASM core" },
+  { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "face tracker is in — blur render path planned" },
   { group: "Needs ML Models", name: "Split-screen / PiP reaction layouts", status: "roadmap", where: "needs hstack/vstack probe + layout UI" },
   { group: "Needs ML Models", name: "Beauty smoothing / eye-contact correction", status: "roadmap", where: "needs face models" },
   { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a sharing backend" },

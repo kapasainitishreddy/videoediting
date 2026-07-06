@@ -21,3 +21,15 @@ for (const f of fs.readdirSync(libSrc).filter((f) => f.endsWith(".js"))) {
   fs.copyFileSync(path.join(libSrc, f), path.join(libDest, f));
 }
 console.log("ffmpeg core + lib copied to public/ffmpeg");
+
+// MediaPipe tasks-vision WASM runtime → public/vision, same-origin like the
+// ffmpeg core (models themselves are small and committed in public/models).
+const visionSrc = path.join(root, "node_modules", "@mediapipe", "tasks-vision", "wasm");
+if (fs.existsSync(visionSrc)) {
+  const visionDest = path.join(root, "public", "vision");
+  fs.mkdirSync(visionDest, { recursive: true });
+  for (const f of fs.readdirSync(visionSrc)) {
+    fs.copyFileSync(path.join(visionSrc, f), path.join(visionDest, f));
+  }
+  console.log("mediapipe vision wasm copied to public/vision");
+}
