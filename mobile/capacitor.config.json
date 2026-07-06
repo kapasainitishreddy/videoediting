@@ -1,0 +1,27 @@
+{
+  "appId": "com.viraledit.app",
+  "appName": "ViralEdit AI",
+  "webDir": "www",
+  "server": {
+    "url": "http://10.0.2.2:3000",
+    "cleartext": true
+  },
+  "android": {
+    "backgroundColor": "#0A0A0B",
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1000,
+      "launchAutoHide": true,
+      "backgroundColor": "#0A0A0B",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0A0A0B"
+    }
+  }
+}

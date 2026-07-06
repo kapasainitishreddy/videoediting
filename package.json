@@ -9,7 +9,9 @@
     "lint": "eslint",
     "postinstall": "node scripts/copy-ffmpeg-core.js",
     "test:e2e": "node scripts/e2e-test.mjs",
-    "test:xfade": "node scripts/xfade-check.mjs"
+    "test:xfade": "node scripts/xfade-check.mjs",
+    "mobile:sync": "cd mobile && npx cap sync android",
+    "mobile:android": "cd mobile && npx cap open android"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",
