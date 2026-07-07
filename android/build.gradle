@@ -1,0 +1,24 @@
+// ViralEdit AI — Android wrapper (Trusted Web Activity).
+//
+// This is NOT a rewrite of the app. It's a thin native shell around the
+// real Next.js web app (see TWA_README.md) — a Chrome-powered fullscreen
+// browser tab with no URL bar, launched from a home-screen icon like any
+// native app. All the actual editing (FFmpeg WASM, MediaPipe, IndexedDB)
+// still runs in the same web engine the desktop site uses; nothing here
+// duplicates that logic.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.5.2"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}

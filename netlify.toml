@@ -1,0 +1,16 @@
+# Netlify build config for the Next.js app. The official Next.js Runtime
+# (auto-detected via the netlify/plugin-nextjs when this repo is connected,
+# or invoked directly in CI below) converts API routes into Netlify
+# Functions automatically — no rewrite of src/app/api/* needed.
+#
+# CAVEAT: /api/download shells out to the `yt-dlp` binary (see Dockerfile).
+# Netlify Functions have no persistent OS binaries, so "paste a link to
+# download" will fail here — every other route (AI direction, transcribe,
+# generate, and all of the in-browser FFmpeg WASM editing) works normally
+# since those are plain outbound HTTP calls or run entirely client-side.
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

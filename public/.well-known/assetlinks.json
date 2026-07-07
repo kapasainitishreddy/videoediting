@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.viraledit.twa",
+      "sha256_cert_fingerprints": [
+        "B6:99:F2:F9:AC:2B:0E:9B:31:CA:21:AD:31:0C:9D:E4:94:21:A4:BB:50:25:F4:09:CE:6C:57:69:32:67:FE:48"
+      ]
+    }
+  }
+]
