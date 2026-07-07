@@ -1,16 +1,26 @@
 name: Build Android APK
 
-# Builds the Trusted Web Activity shell in android/ into an installable,
-# debug-signed .apk and attaches it to the run as a downloadable artifact.
-# This does NOT rebuild the web app — the APK is a thin Chrome-powered
-# wrapper that opens the deployed site (see android/TWA_README.md). Deploy
-# the site first (deploy-netlify.yml, or your own host) and update
-# android/app/src/main/res/values/strings.xml if the URL changes.
+# Builds the SELF-CONTAINED Android app: the entire web app (static export,
+# including the FFmpeg + MediaPipe WASM engines) is bundled inside the APK
+# via Capacitor — no server, no hosting, works fully offline. The optional
+# /api cloud features (AI refinement, Whisper, TTS, stock search, reel
+# download) aren't in the bundle and degrade to their built-in
+# "unavailable" messages; see android/BUNDLED_APK.md.
+#
+# The finished, debug-signed app-debug.apk is attached to the run as the
+# `viraledit-apk` artifact. This build can't run in the authoring sandbox
+# (no Android SDK, dl.google.com blocked) — GitHub's runners have both.
 on:
   push:
     branches: [claude/ai-video-editing-app-vrohjm]
     paths:
       - "android/**"
+      - "src/**"
+      - "public/**"
+      - "capacitor.config.ts"
+      - "next.config.ts"
+      - "package.json"
+      - "scripts/build-static.mjs"
       - ".github/workflows/build-apk.yml"
   workflow_dispatch: {}
 
@@ -20,28 +30,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static export of the web app
+        run: node scripts/build-static.mjs
+
+      - name: Copy web build into the Android project
+        run: npx cap sync android
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          # Pin the wrapper to a version known compatible with AGP 8.9.2
-          # (android/build.gradle — AGP 8.9.x needs Gradle 8.11.1+) instead
-          # of whatever system `gradle` the runner image happens to
-          # preinstall — that drifts over time and silently breaks this
-          # build (AGP has a max supported Gradle version too).
-          gradle-version: "8.13"
-
-      - name: Generate Gradle wrapper (pinned to 8.13)
-        working-directory: android
-        run: gradle wrapper --gradle-version 8.13 --no-daemon
 
       - name: Build debug APK
         working-directory: android
@@ -50,6 +61,6 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: viraledit-debug-apk
+          name: viraledit-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30

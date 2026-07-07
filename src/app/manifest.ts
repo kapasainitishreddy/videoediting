@@ -1,5 +1,10 @@
 import type { MetadataRoute } from "next";
 
+// Required for the static export (bundled Android APK build) — the manifest
+// is a metadata route, and `output: "export"` only includes routes that
+// declare themselves static. No effect on the normal server build.
+export const dynamic = "force-static";
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "ViralEdit AI",

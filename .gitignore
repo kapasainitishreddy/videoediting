@@ -48,8 +48,9 @@ showcase.mp4
 cinematic-showcase.mp4
 golden-hour.mp4
 
-# Android TWA build outputs (debug.keystore IS committed on purpose — see android/TWA_README.md)
+# Android build outputs (debug.keystore IS committed on purpose — see android/BUNDLED_APK.md)
 android/.gradle/
 android/app/build/
 android/build/
 android/local.properties
+.api-excluded-from-static-export/

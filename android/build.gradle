@@ -1,28 +1,29 @@
-// ViralEdit AI — Android wrapper (Trusted Web Activity).
-//
-// This is NOT a rewrite of the app. It's a thin native shell around the
-// real Next.js web app (see TWA_README.md) — a Chrome-powered fullscreen
-// browser tab with no URL bar, launched from a home-screen icon like any
-// native app. All the actual editing (FFmpeg WASM, MediaPipe, IndexedDB)
-// still runs in the same web engine the desktop site uses; nothing here
-// duplicates that logic.
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
 buildscript {
+    
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        // 8.9.2, not 8.5.2: androidbrowserhelper 2.6.1 transitively pulls
-        // in androidx.browser 1.9.0-alpha04, which requires compileSdk 36
-        // and AGP 8.9.1+ (Gradle refused to build with the older pinning —
-        // see git history if this needs to move again).
-        classpath "com.android.tools.build:gradle:8.9.2"
+        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'com.google.gms:google-services:4.4.4'
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
     }
 }
 
-// NOTE: no `allprojects { repositories {...} }` here — settings.gradle's
-// dependencyResolutionManagement already centralizes repos and sets
-// FAIL_ON_PROJECT_REPOS, which forbids declaring them again at the
-// project level (Gradle errors: "prefer settings repositories over
-// project repositories"). buildscript{}'s own repositories block above is
-// a separate resolution scope (classpath deps) and is unaffected by that.
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

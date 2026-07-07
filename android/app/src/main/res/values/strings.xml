@@ -1,8 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name" translatable="false">ViralEdit AI</string>
-    <!-- Change these two if you deploy the web app to your own domain —
-         they're the ONLY two lines that point this shell at your site. -->
-    <string name="twa_url" translatable="false">https://viraledit-ai.netlify.app/home</string>
-    <string name="twa_host" translatable="false">viraledit-ai.netlify.app</string>
+    <string name="app_name">ViralEdit AI</string>
+    <string name="title_activity_main">ViralEdit AI</string>
+    <string name="package_name">app.viraledit.android</string>
+    <string name="custom_url_scheme">app.viraledit.android</string>
 </resources>
