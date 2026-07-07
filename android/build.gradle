@@ -16,9 +16,9 @@ buildscript {
     }
 }
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
+// NOTE: no `allprojects { repositories {...} }` here — settings.gradle's
+// dependencyResolutionManagement already centralizes repos and sets
+// FAIL_ON_PROJECT_REPOS, which forbids declaring them again at the
+// project level (Gradle errors: "prefer settings repositories over
+// project repositories"). buildscript{}'s own repositories block above is
+// a separate resolution scope (classpath deps) and is unaffected by that.
