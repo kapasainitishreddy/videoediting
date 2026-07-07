@@ -450,6 +450,13 @@ export default function ExportPage() {
           </div>
         )}
 
+        <button
+          onClick={() => router.push("/marketing")}
+          className="mt-2 flex items-center justify-center gap-2 rounded-full border border-accent/40 bg-accent/10 py-3 text-sm font-semibold text-accent"
+        >
+          📣 Marketing HQ — calendar, A/B tests, sponsor pitch, media kit
+        </button>
+
         <div className="mt-2 flex gap-3">
           <button
             onClick={() => router.push("/editor")}

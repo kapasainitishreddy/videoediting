@@ -212,6 +212,16 @@ export const FEATURES: Feature[] = [
   { group: "Creator Growth", name: "Hook writer — niche-tuned opening lines with the why", status: "working", where: "Editor → Pro Tools → Hook Writer" },
   { group: "Creator Growth", name: "Visual similar-shot search across your library", status: "working", where: "Editor → Pro Tools → Find Similar Shots" },
 
+  // ---------- Marketing HQ (creator GTM, adapted from open-source ai-marketing-skills) ----------
+  { group: "Marketing HQ", name: "Caption slop check / humanizer (AI-writing detector)", status: "working", where: "/marketing → Slop Check" },
+  { group: "Marketing HQ", name: "Title & hook optimizer with rewrites", status: "working", where: "/marketing → Title Optimizer" },
+  { group: "Marketing HQ", name: "2-week content calendar generator", status: "working", where: "/marketing → Content Calendar" },
+  { group: "Marketing HQ", name: "UTM link builder (know which video sent the click)", status: "working", where: "/marketing → UTM Links" },
+  { group: "Marketing HQ", name: "A/B experiment planner with honest sample sizes", status: "working", where: "/marketing → A/B Planner" },
+  { group: "Marketing HQ", name: "Sponsor pitch writer + follow-up cadence", status: "working", where: "/marketing → Sponsor Pitch" },
+  { group: "Marketing HQ", name: "Media kit builder (.md download)", status: "working", where: "/marketing → Media Kit" },
+  { group: "Marketing HQ", name: "Repurposing map — one edit → every platform, wired to app features", status: "working", where: "/marketing → Repurposing Map" },
+
   // ---------- Honest roadmap (needs models/backends this stack doesn't have) ----------
   { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "face tracker is in — blur render path planned" },
   { group: "Needs ML Models", name: "Split-screen / PiP reaction layouts", status: "roadmap", where: "needs hstack/vstack probe + layout UI" },

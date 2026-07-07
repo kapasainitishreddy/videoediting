@@ -16,6 +16,9 @@ import {
 } from "../src/lib/similarity.ts";
 import { parseWhisperWords, fillerRanges, wordCutRanges, transcriptLines } from "../src/lib/transcript-edit.ts";
 import { chromaComplex, chromaImageBgComplex, DEFAULT_CHROMA } from "../src/lib/chroma.ts";
+import {
+  slopCheck, optimizeTitle, contentCalendar, utmLink, abExperimentPlan, sponsorPitch, mediaKit, repurposePlan,
+} from "../src/lib/marketing.ts";
 
 let passed = 0;
 let failed = 0;
@@ -435,6 +438,84 @@ test("chromaImageBgComplex scales the [1:v] plate to cover", () => {
   const fc = chromaImageBgComplex({ ...DEFAULT_CHROMA, color: "#00ff00", bg: "vset:studio-glow" }, "scale=720:1280", "format=yuv420p", { w: 720, h: 1280 });
   assert.match(fc, /\[1:v\]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280/);
   assert.match(fc, /\[bg\]\[fg\]overlay/);
+});
+
+// --- marketing ------------------------------------------------------------------------------------------
+
+console.log("\nmarketing.ts");
+test("slopCheck flags AI-isms, passes human writing", () => {
+  const slop = slopCheck("In today's fast-paced world, this game-changer will unlock your potential. Let's dive into it — seamless!");
+  assert.ok(slop.score < 58, `score ${slop.score}`);
+  assert.ok(slop.flags.length >= 4);
+  const human = slopCheck("I burned the first three pancakes so you don't have to. Here's the pan temperature that finally worked.");
+  assert.ok(human.score >= 86, `score ${human.score}`);
+  assert.equal(human.flags.length, 0);
+});
+test("slopCheck catches hashtag stuffing", () => {
+  const r = slopCheck("nice video #a #b #c #d #e #f #g #h #i #j");
+  assert.ok(r.flags.some((f) => f.why.includes("hashtag")));
+});
+test("optimizeTitle rewards number+curiosity, gives 3 rewrites", () => {
+  const good = optimizeTitle("Why 3 of my edits failed (the mistake nobody mentions)");
+  const bad = optimizeTitle("MY VLOG!!!");
+  assert.ok(good.score > bad.score + 20, `${good.score} vs ${bad.score}`);
+  assert.equal(good.rewrites.length, 3);
+  assert.ok(bad.tips.length >= 2);
+});
+test("contentCalendar: right shape, rotating formats, deterministic per seed", () => {
+  const cal = contentCalendar("street food", { weeks: 2, perWeek: 4, seed: 5 });
+  assert.equal(cal.length, 2);
+  assert.equal(cal[0].length, 4);
+  assert.ok(cal[0][0].angle.includes("street food"));
+  assert.ok(new Set(cal[0].map((s) => s.format)).size === 4, "formats rotate within a week");
+  const again = contentCalendar("street food", { weeks: 2, perWeek: 4, seed: 5 });
+  assert.deepEqual(cal, again);
+});
+test("utmLink builds tagged URLs and validates input", () => {
+  const r = utmLink("myshop.com/products?ref=x", { source: "TikTok", campaign: "Launch Week" });
+  assert.equal(r.ok, true);
+  assert.match(r.url, /^https:\/\/myshop\.com\/products\?/);
+  assert.match(r.url, /utm_source=tiktok/);
+  assert.match(r.url, /utm_campaign=launch_week/);
+  assert.match(r.url, /ref=x/); // existing params survive
+  assert.equal(utmLink("not a url at all", { source: "x" }).ok, false);
+  assert.equal(utmLink("https://ok.com", { source: "  " }).ok, false);
+});
+test("abExperimentPlan sizes honestly and needs 2+ variants", () => {
+  const p = abExperimentPlan({ what: "thumbnail", variants: ["A", "B"], dailyViews: 1000 });
+  assert.ok(p);
+  assert.match(p.metric, /click-through/);
+  assert.ok(p.durationDays >= 3 && p.durationDays <= 30);
+  assert.equal(abExperimentPlan({ what: "hook", variants: ["only one"] }), null);
+});
+test("sponsorPitch merges fields into subjects, email and cadence", () => {
+  const p = sponsorPitch({ creator: "Nia", niche: "fitness", followers: "42k", brand: "HydroCo" });
+  assert.equal(p.subjects.length, 3);
+  assert.ok(p.subjects.some((s) => s.includes("HydroCo")));
+  assert.match(p.email, /Nia/);
+  assert.match(p.email, /42k followers/);
+  assert.equal(p.followUps.length, 2);
+  assert.ok(p.followUps[1].day > p.followUps[0].day);
+});
+test("mediaKit renders the platform table and sections", () => {
+  const md = mediaKit({
+    creator: "Nia",
+    niche: "fitness",
+    platforms: [{ name: "TikTok", handle: "@nia", followers: "42k", avgViews: "120k" }, { name: "", handle: "", followers: "" }],
+    contact: "nia@example.com",
+    pastBrands: "HydroCo, GymKit",
+  });
+  assert.match(md, /# Nia — Media Kit/);
+  assert.match(md, /\| TikTok \| @nia \| 42k \| 120k \|/);
+  assert.ok(!md.includes("|  |"), "empty platform rows dropped");
+  assert.match(md, /Past collaborations/);
+});
+test("repurposePlan adds the clips-channel row only for long videos", () => {
+  const short = repurposePlan(45);
+  const long = repurposePlan(900);
+  assert.ok(!short.some((r) => r.platform === "Clips channel"));
+  assert.ok(long.some((r) => r.platform === "Clips channel"));
+  assert.ok(short.every((r) => r.produceWith.length > 0));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
