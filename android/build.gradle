@@ -12,7 +12,11 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath "com.android.tools.build:gradle:8.5.2"
+        // 8.9.2, not 8.5.2: androidbrowserhelper 2.6.1 transitively pulls
+        // in androidx.browser 1.9.0-alpha04, which requires compileSdk 36
+        // and AGP 8.9.1+ (Gradle refused to build with the older pinning —
+        // see git history if this needs to move again).
+        classpath "com.android.tools.build:gradle:8.9.2"
     }
 }
 

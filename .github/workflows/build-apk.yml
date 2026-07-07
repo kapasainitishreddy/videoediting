@@ -32,16 +32,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          # Pin the wrapper to a version known compatible with AGP 8.5.2
-          # (android/build.gradle) instead of whatever system `gradle` the
-          # runner image happens to preinstall — that drifts over time and
-          # silently breaks this build (AGP has a max supported Gradle
-          # version).
-          gradle-version: "8.7"
+          # Pin the wrapper to a version known compatible with AGP 8.9.2
+          # (android/build.gradle — AGP 8.9.x needs Gradle 8.11.1+) instead
+          # of whatever system `gradle` the runner image happens to
+          # preinstall — that drifts over time and silently breaks this
+          # build (AGP has a max supported Gradle version too).
+          gradle-version: "8.13"
 
-      - name: Generate Gradle wrapper (pinned to 8.7)
+      - name: Generate Gradle wrapper (pinned to 8.13)
         working-directory: android
-        run: gradle wrapper --gradle-version 8.7 --no-daemon
+        run: gradle wrapper --gradle-version 8.13 --no-daemon
 
       - name: Build debug APK
         working-directory: android
