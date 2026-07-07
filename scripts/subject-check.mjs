@@ -22,7 +22,9 @@ await browser.close();
 console.log(JSON.stringify(results, null, 2));
 const expected = [
   "chromakey", "chroma_color_bg", "chroma_blur_bg", "track_crop", "face_punch",
-  "delogo", "lut3d", "vset_image_bg", "chroma_pixels",
+  "delogo", "lut3d", "vset_image_bg",
+  "beauty", "blur_fill", "portrait_dof", "freeze_frame", "privacy_blur", "split_screen", "pip",
+  "chroma_pixels",
 ];
 const missing = expected.filter((k) => !(k in results));
 const bad = Object.entries(results).filter(([, v]) => v !== "ok");

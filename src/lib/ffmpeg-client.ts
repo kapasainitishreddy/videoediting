@@ -16,6 +16,15 @@ import { buildLookFilter, DEFAULT_LOOK, type LookConfig } from "./cinematic";
 import { motionFilter, type MotionEffect } from "./motion";
 import { trackCropFilter, facePunchFilter, type TrackPath } from "./track-core";
 import { chromaComplex, chromaImageBgComplex, type ChromaSettings } from "./chroma";
+import {
+  beautyFilter,
+  blurFillComplex,
+  portraitBlurComplex,
+  freezeFrameChain,
+  privacyBlurComplex,
+  splitStackComplex,
+  pipComplex,
+} from "./compose";
 
 // FFmpeg WASM may return views over SharedArrayBuffer; copy into a plain
 // ArrayBuffer so Blob accepts it.
@@ -155,6 +164,7 @@ export interface RenderOptions {
   punchBySegment?: Map<string, { cx: number; cy: number }>; // face punch-in target
   chromaBgImages?: Map<string, Blob>; // "vset:*" background plates, keyed by bg id
   lookBySegment?: Map<string, string>; // per-segment grade override (adjustment sections)
+  beauty?: number; // skin-smoothing strength 0..1 applied to every segment
   // Draft mode: 360×640, higher CRF, and the slow overscan filters (zoompan
   // punch-ins / Ken Burns) plus caption/atmosphere passes are skipped — a
   // fast cut preview, not the final picture.
@@ -189,6 +199,9 @@ export async function renderEdit(
   const OW = draft ? 360 : 720;
   const OH = draft ? 640 : 1280;
   const CRF = draft ? "32" : "26";
+  // skin-smoothing runs once per segment, just before the look grade so the
+  // grade still touches real (smoothed) pixels. Skipped in draft previews.
+  const beautyF = opts.beauty && opts.beauty > 0 && !draft ? beautyFilter(opts.beauty) : "";
 
   // 1. Write + normalize every segment to 720x1280 (9:16) so xfade works
   const segFiles: { file: string; duration: number }[] = [];
@@ -232,7 +245,7 @@ export async function renderEdit(
         ...scaling,
         "fps=30",
       ].filter(Boolean).join(",");
-      const postChain = [normalize, segLookFilter, "format=yuv420p"].filter(Boolean).join(",");
+      const postChain = [normalize, beautyF, segLookFilter, "format=yuv420p"].filter(Boolean).join(",");
       const vsetImage = chroma.bg.startsWith("vset:") ? opts.chromaBgImages?.get(chroma.bg) : undefined;
       if (vsetImage) {
         // virtual set: the still plate is input [1:v], looped behind the key
@@ -262,6 +275,7 @@ export async function renderEdit(
         ...scaling,
         "fps=30",
         normalize,
+        beautyF,
         segLookFilter,
         "format=yuv420p",
       ].filter(Boolean).join(",");
@@ -356,6 +370,86 @@ export async function applyCubeToClip(video: Blob, cubeText: string): Promise<Bl
   const data = await ff.readFile("lut_out.mp4");
   await ff.deleteFile("lut_out.mp4").catch(() => {});
   return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
+}
+
+// ---------------------------------------------------------------------------
+// Derived-clip creators — each runs a compositing graph over one (or two)
+// clips and returns a NEW clip blob, leaving the originals untouched. Same
+// pattern as removeBackground / removeWatermark: the editor adds the result
+// as a new clip on the shelf. All 9:16 720x1280, audio copied when present.
+// ---------------------------------------------------------------------------
+
+const OUT_W = 720;
+const OUT_H = 1280;
+
+async function runComplex(inputFiles: Blob[], filterComplex: string, hasAudio = false): Promise<Blob> {
+  const ff = await getFFmpeg();
+  for (let i = 0; i < inputFiles.length; i++) await ff.writeFile(`ci_${i}.mp4`, await fetchFile(inputFiles[i]));
+  const inArgs = inputFiles.flatMap((_, i) => ["-i", `ci_${i}.mp4`]);
+  const audioArgs = hasAudio ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"];
+  const code = await ff.exec([
+    ...inArgs,
+    "-filter_complex", filterComplex,
+    "-map", "[v]", ...audioArgs,
+    "-preset", "ultrafast", "-crf", "24", "-y", "cx_out.mp4",
+  ]);
+  for (let i = 0; i < inputFiles.length; i++) await ff.deleteFile(`ci_${i}.mp4`).catch(() => {});
+  if (code !== 0) {
+    await ff.deleteFile("cx_out.mp4").catch(() => {});
+    throw new Error("compositing failed on this clip");
+  }
+  const data = await ff.readFile("cx_out.mp4");
+  await ff.deleteFile("cx_out.mp4").catch(() => {});
+  return new Blob([toArrayBuffer(data as Uint8Array)], { type: "video/mp4" });
+}
+
+// Blurred-background fill: a non-vertical clip fills 9:16 with a defocused
+// copy of itself instead of black bars.
+export async function blurFillClip(video: Blob): Promise<Blob> {
+  const core = "fps=30";
+  return runComplex([video], blurFillComplex(core, "format=yuv420p", { w: OUT_W, h: OUT_H }));
+}
+
+// Fake depth-of-field portrait: sharp subject (cx,cy in 0..1) over a blurred
+// copy of the frame.
+export async function portraitBlurClip(video: Blob, cx = 0.5, cy = 0.4): Promise<Blob> {
+  const core = `scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},fps=30`;
+  return runComplex([video], portraitBlurComplex(cx, cy, core, "format=yuv420p", { w: OUT_W, h: OUT_H }));
+}
+
+// Privacy blur: a moving box follows a tracked face, blurring it. `path`
+// comes from trackFace; the segment window covers the whole clip.
+export async function privacyBlurClip(video: Blob, path: TrackPath): Promise<Blob> {
+  const core = `scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},fps=30`;
+  const seg = { start: 0, end: path.duration, speed: 1 };
+  const fc = privacyBlurComplex(path, seg, { w: OUT_W, h: OUT_H });
+  if (!fc) throw new Error("No face path to blur — track a face on this clip first.");
+  // prepend the core scaling into the graph's first node
+  const wired = fc.replace("[0:v]split", `[0:v]${core},split`);
+  return runComplex([video], wired);
+}
+
+// Freeze-frame: hold the frame at `atSec` for `holdSec`.
+export async function freezeFrameClip(video: Blob, atSec: number, holdSec = 1.2): Promise<Blob> {
+  const { complex } = freezeFrameChain(atSec, holdSec);
+  const wired =
+    complex.replace("[0:v]split=3", `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},fps=30,split=3`);
+  return runComplex([video], wired);
+}
+
+// 2-up split screen from two clips.
+export async function splitScreenClip(a: Blob, b: Blob, dir: "v" | "h" = "v"): Promise<Blob> {
+  return runComplex([a, b], splitStackComplex(dir, { w: OUT_W, h: OUT_H }), true);
+}
+
+// Picture-in-picture: `pip` shrunk into a corner of `main`.
+export async function pipClip(
+  main: Blob,
+  pip: Blob,
+  corner: "tl" | "tr" | "bl" | "br" = "br",
+  scale = 0.32
+): Promise<Blob> {
+  return runComplex([main, pip], pipComplex(corner, scale, { w: OUT_W, h: OUT_H }), true);
 }
 
 // Composite atmosphere overlay, burn caption PNGs, lay music under the cut.

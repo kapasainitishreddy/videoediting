@@ -15,13 +15,16 @@
 import { useState } from "react";
 import { v4 as uuid } from "uuid";
 import {
-  AudioLines, Copy, Download, FileText, Languages, Mic2, Scissors, SearchCheck,
-  ShieldAlert, SlidersHorizontal, Sparkle, Upload, Users, Wand2, ChevronDown,
+  AudioLines, Copy, Download, FileText, Languages, Layers, Mic2, Scissors, SearchCheck,
+  ShieldAlert, SlidersHorizontal, Sparkle, Upload, Users, Wand2, ChevronDown, Repeat, GitCompare,
 } from "lucide-react";
 import { useProject } from "@/store/project";
 import { getVideo, saveClipMeta } from "@/lib/storage";
 import type { EditPlan, UserClip } from "@/lib/types";
 import { analyzeClip } from "@/lib/clip-analysis";
+import { detectRepeatTakes, alignByAudio, type CamInput } from "@/lib/sync";
+import { reshootScore, type ReshootResult } from "@/lib/reshoot";
+import { splitScreenClip, pipClip } from "@/lib/ffmpeg-client";
 import { silenceRanges, measureLoudness, normalizeAudioBlob } from "@/lib/audio-polish";
 import {
   tightenSilences, insertCutaways, activeSpeakerCut, longformClips,
@@ -149,6 +152,19 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
   const [killed, setKilled] = useState<Set<number>>(new Set());
   const [langs, setLangs] = useState("es, pt-BR, hi");
   const [lutClip, setLutClip] = useState("");
+  // compositing
+  const [ssA, setSsA] = useState("");
+  const [ssB, setSsB] = useState("");
+  const [ssDir, setSsDir] = useState<"v" | "h">("v");
+  const [pipMain, setPipMain] = useState("");
+  const [pipOver, setPipOver] = useState("");
+  const [pipCorner, setPipCorner] = useState<"tl" | "tr" | "bl" | "br">("br");
+  // repeat-take + multi-cam align + reshoot
+  const [takes, setTakes] = useState<{ keep: string; duplicates: string[]; similarity: number }[] | null>(null);
+  const [aligned, setAligned] = useState<{ clipId: string; offsetSec: number; score: number; aligned: boolean }[] | null>(null);
+  const [reshootA, setReshootA] = useState("");
+  const [reshootB, setReshootB] = useState("");
+  const [reshoot, setReshoot] = useState<ReshootResult | null>(null);
 
   const say = (m: string) => {
     setNote(m);
@@ -333,6 +349,100 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
       const q = sigs.find((s) => s.clipId === simFor);
       if (!q) throw new Error("Couldn't read the reference clip");
       setSimilar(findSimilar(q, sigs, 5));
+    });
+
+  // ---- compositing: split-screen + PiP ------------------------------------------------
+
+  const addDerived = async (base: UserClip, blob: Blob, suffix: string) => {
+    const id = uuid();
+    const name = `${base.name.replace(/\.[a-z0-9]+$/i, "")} · ${suffix}`;
+    let thumbnail: string | undefined;
+    try {
+      thumbnail = await makeThumbnail(blob);
+    } catch {
+      /* stripes placeholder */
+    }
+    await saveVideo(id, blob, name);
+    const derived = { id, name, duration: base.duration, thumbnail };
+    await saveClipMeta(derived).catch(() => {});
+    addClip(derived);
+  };
+
+  const handleSplit = () =>
+    run("Building the split screen…", async () => {
+      const a = clips.find((c) => c.id === ssA);
+      const b = clips.find((c) => c.id === ssB);
+      if (!a || !b || a.id === b.id) {
+        fail("Pick two different clips for the split screen.");
+        return;
+      }
+      const [va, vb] = [await getVideo(a.id), await getVideo(b.id)];
+      if (!va || !vb) throw new Error("A clip is missing from storage");
+      await addDerived(a, await splitScreenClip(va.blob, vb.blob, ssDir), `split ${ssDir === "v" ? "top/bottom" : "side-by-side"}`);
+      say("Split-screen clip added to your shelf.");
+    });
+
+  const handlePip = () =>
+    run("Building the picture-in-picture…", async () => {
+      const m = clips.find((c) => c.id === pipMain);
+      const o = clips.find((c) => c.id === pipOver);
+      if (!m || !o || m.id === o.id) {
+        fail("Pick two different clips for PiP.");
+        return;
+      }
+      const [vm, vo] = [await getVideo(m.id), await getVideo(o.id)];
+      if (!vm || !vo) throw new Error("A clip is missing from storage");
+      await addDerived(m, await pipClip(vm.blob, vo.blob, pipCorner), "PiP");
+      say("Picture-in-picture clip added to your shelf.");
+    });
+
+  // ---- repeat-take detector + multi-cam align + reshoot compare -----------------------
+
+  const handleRepeatTakes = () =>
+    run("Comparing every clip…", async () => {
+      const sigs: ClipSignature[] = [];
+      for (const c of clips) {
+        const v = await getVideo(c.id);
+        if (!v) continue;
+        const s = await clipSignature(c, v.blob);
+        if (s) sigs.push(s);
+      }
+      const groups = detectRepeatTakes(sigs);
+      setTakes(groups);
+      if (groups.length === 0) say("No near-duplicate takes — every clip is distinct.");
+    });
+
+  const handleAlign = () =>
+    run("Listening for a common moment…", async () => {
+      const cams: CamInput[] = [];
+      for (const c of clips.slice(0, 6)) {
+        const v = await getVideo(c.id);
+        if (!v) continue;
+        const audio = await decodeAudio(v.blob);
+        if (audio) cams.push({ clipId: c.id, data: audio.data, sampleRate: audio.sampleRate });
+      }
+      if (cams.length < 2) {
+        fail("Multi-cam sync needs at least two clips with audio.");
+        return;
+      }
+      setAligned(alignByAudio(cams));
+    });
+
+  const handleReshoot = () =>
+    run("Scoring both takes…", async () => {
+      const a = clips.find((c) => c.id === reshootA);
+      const b = clips.find((c) => c.id === reshootB);
+      if (!a || !b || a.id === b.id) {
+        fail("Pick your previous take and the reshoot (two different clips).");
+        return;
+      }
+      const [va, vb] = [await getVideo(a.id), await getVideo(b.id)];
+      if (!va || !vb) throw new Error("A clip is missing from storage");
+      const [aa, ab] = [
+        await analyzeClip(va.blob, { samplesPerSecond: 4, maxSamples: 200 }),
+        await analyzeClip(vb.blob, { samplesPerSecond: 4, maxSamples: 200 }),
+      ];
+      setReshoot(reshootScore({ motion: aa.motion, brightness: aa.brightness }, { motion: ab.motion, brightness: ab.brightness }));
     });
 
   // ---- audio & rights -----------------------------------------------------------------
@@ -614,6 +724,105 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
           </ul>
         )}
         <p className="mt-2 text-[10px] text-neutral-600">Color-layout + motion matching, on-device — no model download.</p>
+      </Section>
+
+      <Section icon={<Layers size={14} className="text-accent" />} title="Split Screen & PiP">
+        <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">2-up split screen</p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <select value={ssA} onChange={(e) => setSsA(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Clip A…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={ssB} onChange={(e) => setSsB(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Clip B…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={ssDir} onChange={(e) => setSsDir(e.target.value as "v" | "h")} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="v">Top / bottom</option>
+            <option value="h">Side by side</option>
+          </select>
+          <button className={btnAccent} disabled={!!busy || !ssA || !ssB} onClick={handleSplit}>Make split</button>
+        </div>
+        <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wider text-neutral-600">Picture-in-picture (reaction)</p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <select value={pipMain} onChange={(e) => setPipMain(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Main…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={pipOver} onChange={(e) => setPipOver(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Inset…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={pipCorner} onChange={(e) => setPipCorner(e.target.value as typeof pipCorner)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="br">Bottom right</option>
+            <option value="bl">Bottom left</option>
+            <option value="tr">Top right</option>
+            <option value="tl">Top left</option>
+          </select>
+          <button className={btnAccent} disabled={!!busy || !pipMain || !pipOver} onClick={handlePip}>Make PiP</button>
+        </div>
+        <p className="mt-2 text-[10px] text-neutral-600">Each makes a new clip on your shelf — the originals stay put.</p>
+      </Section>
+
+      <Section icon={<Repeat size={14} className="text-accent" />} title="Repeat-Take Detector">
+        <button className={btnAccent} disabled={!!busy || clips.length < 2} onClick={handleRepeatTakes}>Find duplicate takes</button>
+        {takes && takes.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {takes.map((g, i) => (
+              <div key={i} className="rounded-lg border border-card-border px-3 py-2 text-xs">
+                <p className="text-neutral-200">Keep <span className="text-accent">{clips.find((c) => c.id === g.keep)?.name ?? g.keep}</span></p>
+                <p className="text-[11px] text-neutral-500">
+                  {Math.round(g.similarity * 100)}% match to: {g.duplicates.map((d) => clips.find((c) => c.id === d)?.name ?? d).join(", ")}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-600">Groups near-identical shots so you keep the best and drop the rest.</p>
+      </Section>
+
+      <Section icon={<Users size={14} className="text-accent" />} title="Multi-Cam Audio Sync">
+        <button className={btnAccent} disabled={!!busy || clips.length < 2} onClick={handleAlign}>Align clips by sound</button>
+        {aligned && (
+          <div className="mt-2 space-y-1 text-xs">
+            {aligned.map((a) => (
+              <p key={a.clipId} className={a.aligned ? "text-neutral-300" : "text-yellow-400"}>
+                {clips.find((c) => c.id === a.clipId)?.name ?? a.clipId}: {a.aligned ? `trim ${a.offsetSec}s off the head (match ${Math.round(a.score * 100)}%)` : "no common moment found"}
+              </p>
+            ))}
+          </div>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-600">Finds the offset that lines up cameras that recorded the same moment — feed the aligned clips to the speaker cut.</p>
+      </Section>
+
+      <Section icon={<GitCompare size={14} className="text-accent" />} title="Reshoot Compare">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <select value={reshootA} onChange={(e) => setReshootA(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Previous take…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={reshootB} onChange={(e) => setReshootB(e.target.value)} className="rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs">
+            <option value="">Reshoot…</option>
+            {clips.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <button className={btnAccent} disabled={!!busy || !reshootA || !reshootB} onClick={handleReshoot}>Compare</button>
+        </div>
+        {reshoot && (
+          <div className="mt-2 rounded-lg border border-card-border p-3 text-xs">
+            <p className="text-sm font-bold">
+              <span className="text-neutral-500">{reshoot.scorePrev}</span>
+              <span className="mx-2 text-neutral-600">→</span>
+              <span className={reshoot.scoreCurr >= reshoot.scorePrev ? "text-green-400" : "text-red-400"}>{reshoot.scoreCurr}</span>
+            </p>
+            <p className="mt-0.5 text-[11px] text-neutral-400">{reshoot.verdict}</p>
+            <ul className="mt-1.5 space-y-0.5">
+              {reshoot.deltas.map((d, i) => (
+                <li key={i} className="text-[11px] text-neutral-500">{d.label}: {d.note}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="mt-2 text-[10px] text-neutral-600">Scores steadiness, exposure, energy and even lighting so you keep the better take.</p>
       </Section>
 
       <Section icon={<AudioLines size={14} className="text-accent" />} title="Audio & Rights">

@@ -204,6 +204,7 @@ export default function StudioPanel() {
               <Toggle label="Denoise footage" value={look.denoise} onChange={(v) => setLook({ denoise: v })} />
               <Toggle label="Sharpen" value={look.sharpen} onChange={(v) => setLook({ sharpen: v })} />
               <Toggle label="Auto color/exposure match" value={look.autoNormalize} onChange={(v) => setLook({ autoNormalize: v })} />
+              <Toggle label="Beauty skin-smoothing" value={studio.beauty > 0} onChange={(v) => setStudio({ beauty: v ? 0.5 : 0 })} />
             </>
           )}
           {!pro && (

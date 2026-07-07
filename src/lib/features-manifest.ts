@@ -36,7 +36,7 @@ export const FEATURES: Feature[] = [
   { group: "Direction & Coaching", name: "Explain-this-edit narration", status: "key", where: "richer with MINIMAX/ANTHROPIC/OPENAI key" },
   { group: "Direction & Coaching", name: "Progressive skill levels", status: "roadmap", where: "UI gating planned" },
   { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "roadmap", where: "needs getUserMedia recording UI" },
-  { group: "Direction & Coaching", name: "Reshoot comparison score", status: "roadmap", where: "builds on clip-analysis" },
+  { group: "Direction & Coaching", name: "Reshoot comparison score", status: "working", where: "Editor → Pro Tools → Reshoot Compare" },
   { group: "Direction & Coaching", name: "Undo history for edits", status: "working", where: "Editor → undo (up to 20 steps)" },
   { group: "Direction & Coaching", name: "Portable project export/import (.viraledit.json)", status: "working", where: "Editor → Pro Tools → Handoff" },
 
@@ -77,8 +77,9 @@ export const FEATURES: Feature[] = [
   { group: "Composition", name: "Composition score + tips", status: "working", where: "motion.compositionScore — surfacing UI soon" },
   { group: "Composition", name: "Cinema letterbox bars", status: "working", where: "Studio → letterbox toggle" },
   { group: "Composition", name: "Rule-of-thirds guidance", status: "working", where: "part of composition score tips" },
-  { group: "Composition", name: "Content-aware letterbox fill (outpainting)", status: "roadmap", where: "needs a generative model" },
-  { group: "Composition", name: "Depth-of-field simulation", status: "roadmap", where: "needs depth estimation model" },
+  { group: "Composition", name: "Blur-fill background (fills bars with a defocused copy)", status: "working", where: "Clip card → face icon → Effects → Blur-fill vertical" },
+  { group: "Composition", name: "Content-aware letterbox fill (true outpainting)", status: "roadmap", where: "blur-fill ships today; painting NEW pixels needs a generative model" },
+  { group: "Composition", name: "Depth-of-field simulation (portrait blur)", status: "working", where: "Clip card → face icon → Effects → Portrait blur" },
 
   // ---------- Lens & optics ----------
   { group: "Lens & Optics", name: "Anamorphic lens simulation", status: "working", where: "Studio → Anamorphic" },
@@ -87,7 +88,7 @@ export const FEATURES: Feature[] = [
   { group: "Lens & Optics", name: "Film grain", status: "working", where: "Studio → toggle" },
   { group: "Lens & Optics", name: "Halation bloom", status: "working", where: "Studio → toggle" },
   { group: "Lens & Optics", name: "Lens distortion correct/add", status: "working", where: "lenscorrection in anamorphic chain" },
-  { group: "Lens & Optics", name: "Focus pull simulation", status: "roadmap", where: "needs depth model" },
+  { group: "Lens & Optics", name: "Focus pull simulation (animated)", status: "roadmap", where: "static portrait DoF ships today; a rack-focus PULL needs an animated depth model" },
 
   // ---------- Atmosphere ----------
   { group: "Atmosphere", name: "Rain overlay", status: "working", where: "Studio → Atmosphere" },
@@ -149,8 +150,8 @@ export const FEATURES: Feature[] = [
   // ---------- Smart cutting (v2 drop) ----------
   { group: "Smart Cutting", name: "Highlight-reel distiller for long clips", status: "working", where: "Editor → ⚡ Distill on any clip over 25s" },
   { group: "Smart Cutting", name: "Auto black-bar strip (baked-in letterbox/pillarbox)", status: "working", where: "automatic at clip upload" },
-  { group: "Smart Cutting", name: "Repeat-take detector", status: "roadmap", where: "needs pairwise clip similarity pass" },
-  { group: "Smart Cutting", name: "Multi-cam sync via audio waveforms", status: "roadmap", where: "speaker cut assumes cameras roll in parallel; auto-alignment needs a cross-correlation pass" },
+  { group: "Smart Cutting", name: "Repeat-take detector", status: "working", where: "Editor → Pro Tools → Repeat-Take Detector" },
+  { group: "Smart Cutting", name: "Multi-cam sync via audio waveforms", status: "working", where: "Editor → Pro Tools → Multi-Cam Audio Sync" },
   { group: "Smart Cutting", name: "Text-based editing / filler-word remover", status: "key", where: "Editor → Pro Tools → Edit by Text (OPENAI_API_KEY)" },
   { group: "Smart Cutting", name: "Jump-cut tightener (removes dead air)", status: "working", where: "Editor → Pro Tools → Cut Cleanup" },
   { group: "Smart Cutting", name: "Auto B-roll cutaways at speech gaps", status: "working", where: "Editor → Pro Tools → Cut Cleanup" },
@@ -172,7 +173,7 @@ export const FEATURES: Feature[] = [
   { group: "Overlays+", name: "Emoji reactions on excitement peaks", status: "working", where: "Editor → Overlays+" },
   { group: "Overlays+", name: "Watermark / logo overlay", status: "working", where: "Editor → Overlays+ → Add watermark logo" },
   { group: "Overlays+", name: "Smart caption emphasis (key word pops bigger)", status: "working", where: "automatic in kinetic captions" },
-  { group: "Overlays+", name: "Freeze-frame call-out with annotation", status: "roadmap", where: "needs frame-hold render path" },
+  { group: "Overlays+", name: "Freeze-frame call-out (hold + annotate with captions)", status: "working", where: "Clip card → face icon → Effects → Freeze-frame" },
 
   // ---------- Audio polish (v2 drop) ----------
   { group: "Audio Polish", name: "Music loudness auto-match", status: "working", where: "automatic when you add a track" },
@@ -223,9 +224,10 @@ export const FEATURES: Feature[] = [
   { group: "Marketing HQ", name: "Repurposing map — one edit → every platform, wired to app features", status: "working", where: "/marketing → Repurposing Map" },
 
   // ---------- Honest roadmap (needs models/backends this stack doesn't have) ----------
-  { group: "Needs ML Models", name: "Privacy blur (faces / plates)", status: "roadmap", where: "face tracker is in — blur render path planned" },
-  { group: "Needs ML Models", name: "Split-screen / PiP reaction layouts", status: "roadmap", where: "needs hstack/vstack probe + layout UI" },
-  { group: "Needs ML Models", name: "Beauty smoothing / eye-contact correction", status: "roadmap", where: "needs face models" },
+  { group: "AI Subject Tools", name: "Privacy blur — a blurred box follows the face", status: "working", where: "Clip card → face icon → Effects → Blur the face" },
+  { group: "AI Subject Tools", name: "Split-screen (2-up) + picture-in-picture layouts", status: "working", where: "Editor → Pro Tools → Split Screen & PiP" },
+  { group: "AI Subject Tools", name: "Beauty skin-smoothing", status: "working", where: "Studio → Look & Grade → Beauty skin-smoothing" },
+  { group: "Needs ML Models", name: "Eye-contact correction", status: "roadmap", where: "needs a gaze-redirection model" },
   { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a realtime backend — project files + share codes cover handoff today" },
   { group: "Needs ML Models", name: "Live shared cursors (Figma-style co-editing)", status: "roadmap", where: "needs a realtime sync backend + accounts — deliberately absent from the local-first core" },
   { group: "Needs ML Models", name: "Team workspace with roles + shared library", status: "roadmap", where: "needs accounts + cloud storage; the portable project file is the handoff today" },

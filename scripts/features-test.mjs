@@ -19,6 +19,13 @@ import { chromaComplex, chromaImageBgComplex, DEFAULT_CHROMA } from "../src/lib/
 import {
   slopCheck, optimizeTitle, contentCalendar, utmLink, abExperimentPlan, sponsorPitch, mediaKit, repurposePlan,
 } from "../src/lib/marketing.ts";
+import {
+  beautyFilter, blurFillComplex, portraitBlurComplex, freezeFrameChain,
+  privacyBlurComplex, splitStackComplex, pipComplex,
+} from "../src/lib/compose.ts";
+import { energyEnvelope, crossCorrelate, alignByAudio, detectRepeatTakes } from "../src/lib/sync.ts";
+import { shotQuality, reshootScore } from "../src/lib/reshoot.ts";
+import { frameSignature as fsig } from "../src/lib/similarity.ts";
 
 let passed = 0;
 let failed = 0;
@@ -516,6 +523,113 @@ test("repurposePlan adds the clips-channel row only for long videos", () => {
   assert.ok(!short.some((r) => r.platform === "Clips channel"));
   assert.ok(long.some((r) => r.platform === "Clips channel"));
   assert.ok(short.every((r) => r.produceWith.length > 0));
+});
+
+// --- compose (filter builders) -----------------------------------------------------------------------
+
+console.log("\ncompose.ts");
+const PATH2 = { mode: "face", duration: 2, aspect: 9 / 16, times: [0, 1, 2], cx: [0.3, 0.5, 0.7], cy: [0.4, 0.4, 0.4], size: [0.3, 0.3, 0.3], quality: 0.9 };
+test("beautyFilter emits smartblur scaled by strength", () => {
+  assert.match(beautyFilter(0.5), /^smartblur=lr=/);
+  assert.notEqual(beautyFilter(0.2), beautyFilter(0.9)); // strength changes the params
+});
+test("blurFillComplex has bg blur + centered overlay + [v] out", () => {
+  const fc = blurFillComplex("fps=30", "format=yuv420p", { w: 720, h: 1280 });
+  assert.match(fc, /gblur=sigma=/);
+  assert.match(fc, /overlay=\(W-w\)\/2:\(H-h\)\/2/);
+  assert.ok(fc.trim().endsWith("[v]"));
+});
+test("portraitBlurComplex builds a radial alpha mask over the subject", () => {
+  const fc = portraitBlurComplex(0.6, 0.4, "fps=30", "format=yuv420p", { w: 720, h: 1280 });
+  assert.match(fc, /geq=/);
+  assert.match(fc, /overlay=0:0/);
+  assert.ok(fc.includes("[v]"));
+});
+test("freezeFrameChain concats before/frozen/after", () => {
+  const { complex } = freezeFrameChain(1.5, 1.2);
+  assert.match(complex, /tpad=stop_mode=clone:stop_duration=1.20/);
+  assert.match(complex, /concat=n=3:v=1:a=0\[v\]/);
+});
+test("privacyBlurComplex animates a blurred box, empty when no keyframes", () => {
+  const fc = privacyBlurComplex(PATH2, { start: 0, end: 2, speed: 1 }, { w: 720, h: 1280 });
+  assert.match(fc, /gblur=sigma=/);
+  assert.match(fc, /overlay=x='/);
+  const empty = privacyBlurComplex(PATH2, { start: 50, end: 60, speed: 1 }, { w: 720, h: 1280 });
+  assert.equal(empty, "");
+});
+test("splitStackComplex uses vstack/hstack by direction", () => {
+  assert.match(splitStackComplex("v", { w: 720, h: 1280 }), /vstack=inputs=2/);
+  assert.match(splitStackComplex("h", { w: 720, h: 1280 }), /hstack=inputs=2/);
+});
+test("pipComplex overlays the inset in the chosen corner", () => {
+  assert.match(pipComplex("br", 0.32, { w: 720, h: 1280 }), /overlay=W-w-24:H-h-24/);
+  assert.match(pipComplex("tl", 0.32, { w: 720, h: 1280 }), /overlay=24:24/);
+});
+
+// --- sync (multi-cam + repeat-take) ------------------------------------------------------------------
+
+console.log("\nsync.ts");
+test("energyEnvelope normalizes to a 0..1 shape", () => {
+  const sr = 1000;
+  const data = new Float32Array(sr);
+  for (let i = 0; i < sr; i++) data[i] = i > 400 && i < 500 ? 0.8 : 0.01; // a burst
+  const env = energyEnvelope(data, sr, 100);
+  assert.equal(env.length, 100);
+  assert.ok(Math.max(...env) <= 1.0001 && Math.max(...env) > 0.99);
+});
+test("crossCorrelate recovers a known lag", () => {
+  const a = Array.from({ length: 100 }, (_, i) => (i > 40 && i < 50 ? 1 : 0.02));
+  const b = Array.from({ length: 100 }, (_, i) => (i > 55 && i < 65 ? 1 : 0.02)); // b is +15 later
+  const { lag, score } = crossCorrelate(a, b, 40);
+  assert.ok(Math.abs(lag - 15) <= 1, `lag ${lag}`);
+  assert.ok(score > 0.5);
+});
+test("alignByAudio returns head-trim offsets, reference at 0", () => {
+  const mk = (delaySamples) => {
+    const d = new Float32Array(3000);
+    for (let i = 0; i < 3000; i++) d[i] = i > 1000 + delaySamples && i < 1100 + delaySamples ? 0.9 : 0.01;
+    return d;
+  };
+  const out = alignByAudio([
+    { clipId: "cam1", data: mk(0), sampleRate: 1000 },
+    { clipId: "cam2", data: mk(500), sampleRate: 1000 }, // cam2 recorded the burst 0.5s later
+  ], { hz: 100, maxLagSec: 5 });
+  assert.equal(out.length, 2);
+  assert.ok(out.every((o) => o.offsetSec >= 0));
+  assert.ok(out.some((o) => o.aligned));
+});
+function solidSig(id, rgb) {
+  return { clipId: id, ...fsig(solid(16, 16, rgb), 16, 16), avgMotion: 0.05 };
+}
+test("detectRepeatTakes groups near-identical clips", () => {
+  const groups = detectRepeatTakes([
+    solidSig("a1", [200, 30, 30]),
+    solidSig("a2", [200, 30, 30]), // dup of a1
+    solidSig("b1", [30, 30, 200]),
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].keep, "a1");
+  assert.deepEqual(groups[0].duplicates, ["a2"]);
+});
+
+// --- reshoot ---------------------------------------------------------------------------------------------
+
+console.log("\nreshoot.ts");
+test("shotQuality rewards steady, well-exposed, even footage", () => {
+  const steady = shotQuality({ motion: [0.05, 0.05, 0.05, 0.05], brightness: [0.5, 0.5, 0.5, 0.5] });
+  // jittery: high motion variance, dark + flickering exposure
+  const jittery = shotQuality({ motion: [0.02, 0.5, 0.02, 0.6], brightness: [0.08, 0.28, 0.05, 0.22] });
+  assert.ok(steady.steadiness > jittery.steadiness);
+  assert.ok(steady.exposure > jittery.exposure);
+  assert.ok(steady.consistency > jittery.consistency);
+});
+test("reshootScore picks the better take with a verdict", () => {
+  const bad = { motion: [0.02, 0.5, 0.02, 0.6], brightness: [0.05, 0.95, 0.1, 0.9] };
+  const good = { motion: [0.06, 0.06, 0.06, 0.06], brightness: [0.5, 0.5, 0.5, 0.5] };
+  const r = reshootScore(bad, good);
+  assert.ok(r.scoreCurr > r.scorePrev);
+  assert.match(r.verdict, /reshoot is better/i);
+  assert.equal(r.deltas.length, 4);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

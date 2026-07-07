@@ -25,7 +25,7 @@ import { trackFace, trackAction, detectClipKeyColor, detectFacesAt } from "@/lib
 import { pathCenter, mapToCenterCrop, type TrackPath } from "@/lib/track-core";
 import { DEFAULT_CHROMA, type ChromaSettings } from "@/lib/chroma";
 import { removeBackground } from "@/lib/segmenter";
-import { removeWatermark } from "@/lib/ffmpeg-client";
+import { removeWatermark, blurFillClip, portraitBlurClip, privacyBlurClip, freezeFrameClip } from "@/lib/ffmpeg-client";
 import { VIRTUAL_SETS, isVirtualSet, renderVirtualSet } from "@/lib/vset";
 import ProTools from "@/components/ProTools";
 import { normalizeAudioBlob, roomTone } from "@/lib/audio-polish";
@@ -315,6 +315,103 @@ export default function EditorPage() {
     const chroma = { ...clip.chroma, bg };
     updateClip(clip.id, { chroma });
     saveClipMeta({ ...clip, chroma }).catch(() => {});
+  }
+
+  // Shared: save a freshly-composited blob as a new clip on the shelf,
+  // probing its real duration and thumbnail (both best-effort).
+  async function addDerivedClip(base: UserClip, blob: Blob, suffix: string, extra: Partial<UserClip> = {}) {
+    const id = uuid();
+    const name = `${base.name.replace(/\.[a-z0-9]+$/i, "")} · ${suffix}`;
+    let duration = base.duration;
+    try {
+      const d = await probeDuration(blob);
+      if (Number.isFinite(d) && d > 0) duration = d;
+    } catch {
+      // keep the source duration
+    }
+    let thumbnail: string | undefined;
+    try {
+      thumbnail = await makeThumbnail(blob);
+    } catch {
+      // stripes placeholder is fine
+    }
+    await saveVideo(id, blob, name);
+    const derived: UserClip = { id, name, duration, thumbnail, ...extra };
+    await saveClipMeta(derived).catch(() => {});
+    addClip(derived);
+    setToolsFor(id);
+  }
+
+  // Blur-fill: a non-vertical clip fills 9:16 with a defocused copy of
+  // itself instead of black bars — the standard social background look.
+  async function handleBlurFill(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Blur-filling ${clip.name} to vertical…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      await addDerivedClip(clip, await blurFillClip(v.blob), "blur-fill");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Blur-fill failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Portrait blur (fake depth-of-field): sharp subject over a blurred frame.
+  // Uses the cached face position if there is one, else the frame center.
+  async function handlePortraitBlur(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Adding portrait blur to ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      const fp = facePathsRef.current.get(clip.id);
+      const c = fp ? pathCenter(fp, 0, fp.duration) : { cx: 0.5, cy: 0.4 };
+      await addDerivedClip(clip, await portraitBlurClip(v.blob, c.cx, c.cy), "portrait");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Portrait blur failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Privacy blur: track a face, then blur a box that follows it.
+  async function handlePrivacyBlur(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Finding the face to blur in ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      let path = facePathsRef.current.get(clip.id) ?? null;
+      if (!path) {
+        const res = await trackFace(v.blob, { onProgress: (f) => setBusy(`Tracking the face… ${Math.round(f * 100)}%`) });
+        path = res.path;
+        facePathsRef.current.set(clip.id, path);
+      }
+      if (!path) throw new Error("Couldn't find a face to blur in this clip.");
+      setBusy(`Blurring the face in ${clip.name}…`);
+      await addDerivedClip(clip, await privacyBlurClip(v.blob, path), "face blurred");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Privacy blur failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Freeze-frame: hold the middle frame for ~1.2s (a call-out beat).
+  async function handleFreezeFrame(clip: UserClip) {
+    setError(null);
+    try {
+      setBusy(`Adding a freeze-frame to ${clip.name}…`);
+      const v = await getVideo(clip.id);
+      if (!v) throw new Error("Clip missing from storage");
+      await addDerivedClip(clip, await freezeFrameClip(v.blob, Math.max(0.1, clip.duration / 2), 1.2), "freeze");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Freeze-frame failed");
+    } finally {
+      setBusy(null);
+    }
   }
 
   // AI background removal: selfie segmentation plays the clip through a
@@ -978,6 +1075,7 @@ export default function EditorPage() {
         chromaByClip: chromaByClip.size > 0 ? chromaByClip : undefined,
         chromaBgImages: chromaBgImages.size > 0 ? chromaBgImages : undefined,
         lookBySegment: lookBySegment.size > 0 ? lookBySegment : undefined,
+        beauty: studio2.beauty > 0 ? studio2.beauty : undefined,
         punchBySegment: punchBySegment.size > 0 ? punchBySegment : undefined,
         music: finalAudio,
         captions: burnCaptions.length ? burnCaptions : undefined,
@@ -1182,6 +1280,24 @@ export default function EditorPage() {
                 <p className="mt-1 text-[10px] text-neutral-600">
                   Interpolates a corner box away (delogo) into a new clean copy of the clip.
                 </p>
+              </div>
+
+              <div className="mt-3">
+                <p className="mb-1.5 text-[10px] uppercase tracking-wider text-neutral-600">Effects (make a new clip)</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => handleBlurFill(tc)} disabled={!!busy} className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-300">
+                    Blur-fill vertical
+                  </button>
+                  <button onClick={() => handlePortraitBlur(tc)} disabled={!!busy} className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-300">
+                    Portrait blur (DoF)
+                  </button>
+                  <button onClick={() => handlePrivacyBlur(tc)} disabled={!!busy} className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-300">
+                    Blur the face (privacy)
+                  </button>
+                  <button onClick={() => handleFreezeFrame(tc)} disabled={!!busy} className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-300">
+                    Freeze-frame
+                  </button>
+                </div>
               </div>
 
               {tc.chroma && (

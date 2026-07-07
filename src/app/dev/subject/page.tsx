@@ -15,6 +15,7 @@ import { getFFmpeg } from "@/lib/ffmpeg-client";
 import { chromaComplex, chromaImageBgComplex, DEFAULT_CHROMA } from "@/lib/chroma";
 import { trackCropFilter, facePunchFilter, type TrackPath } from "@/lib/track-core";
 import { generateCube } from "@/lib/lut";
+import { beautyFilter, blurFillComplex, portraitBlurComplex, freezeFrameChain, privacyBlurComplex, splitStackComplex, pipComplex } from "@/lib/compose";
 
 // A plausible smoothed face path: drifts left→right over 2s in a 16:9 frame
 const PATH: TrackPath = {
@@ -144,7 +145,42 @@ export default function SubjectProbe() {
         report("vset_image_bg", "throw:" + String(e).slice(0, 60));
       }
 
-      // 9. PIXEL check: key green over blue, dump 1 frame as PNG, verify the
+      // 9. compositing filters (compose.ts) against the real core
+      await run("beauty", ["-i", "land.mp4", "-vf", beautyFilter(0.5), "-frames:v", "5", "-y", "o.mp4"]);
+      await run("blur_fill", [
+        "-i", "land.mp4",
+        "-filter_complex", blurFillComplex("fps=15", "format=yuv420p", { w: 360, h: 640 }),
+        "-map", "[v]", "-frames:v", "5", "-y", "o.mp4",
+      ]);
+      await run("portrait_dof", [
+        "-i", "land.mp4",
+        "-filter_complex", portraitBlurComplex(0.5, 0.4, "scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=15", "format=yuv420p", { w: 360, h: 640 }),
+        "-map", "[v]", "-frames:v", "5", "-y", "o.mp4",
+      ]);
+      await run("freeze_frame", [
+        "-i", "land.mp4",
+        "-filter_complex", freezeFrameChain(0.5, 0.6).complex.replace("[0:v]split=3", "[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=15,split=3"),
+        "-map", "[v]", "-frames:v", "8", "-y", "o.mp4",
+      ]);
+      {
+        const pv = privacyBlurComplex(PATH, { start: 0.2, end: 1.8, speed: 1 }, { w: 360, h: 640 }).replace(
+          "[0:v]split",
+          "[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,fps=15,split"
+        );
+        await run("privacy_blur", ["-i", "land.mp4", "-filter_complex", pv, "-map", "[v]", "-frames:v", "6", "-y", "o.mp4"]);
+      }
+      await run("split_screen", [
+        "-i", "land.mp4", "-i", "green.mp4",
+        "-filter_complex", splitStackComplex("v", { w: 360, h: 640 }),
+        "-map", "[v]", "-frames:v", "5", "-y", "o.mp4",
+      ]);
+      await run("pip", [
+        "-i", "land.mp4", "-i", "green.mp4",
+        "-filter_complex", pipComplex("br", 0.32, { w: 360, h: 640 }),
+        "-map", "[v]", "-frames:v", "5", "-y", "o.mp4",
+      ]);
+
+      // 10. PIXEL check: key green over blue, dump 1 frame as PNG, verify the
       // corner turned blue (green gone) and the red box survived.
       try {
         const fc = chromaComplex({ ...DEFAULT_CHROMA, color: "#00ff00", bg: "#0000ff" }, "scale=320:568", "format=yuv420p", 1);

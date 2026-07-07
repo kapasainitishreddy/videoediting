@@ -16,6 +16,7 @@ export interface StudioConfig {
   autoKenBurns: boolean; // virtual dolly on static shots
   autoReframe: boolean; // subject-aware 9:16 crop for landscape clips
   autoFacePunch: boolean; // zoom-in punch targeted at the detected face
+  beauty: number; // skin-smoothing strength 0..1 (0 = off)
   overlay: OverlayType | null;
   overlayOpacity: number;
   scoreMood: ScoreMood | null; // compose an original score at this mood
@@ -32,6 +33,7 @@ export const DEFAULT_STUDIO: StudioConfig = {
   autoKenBurns: false,
   autoReframe: false,
   autoFacePunch: false,
+  beauty: 0,
   overlay: null,
   overlayOpacity: 0.5,
   scoreMood: null,
