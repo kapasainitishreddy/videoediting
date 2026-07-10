@@ -27,6 +27,9 @@ import { energyEnvelope, crossCorrelate, alignByAudio, detectRepeatTakes } from 
 import { shotQuality, reshootScore } from "../src/lib/reshoot.ts";
 import { frameSignature as fsig } from "../src/lib/similarity.ts";
 import { interpretTurn } from "../src/lib/chat-edit.ts";
+import { interpretMotionGfx } from "../src/lib/motion-gfx.ts";
+import { interpretVibe } from "../src/lib/vibe-music.ts";
+import { tierCheckout, PRICING_TIERS } from "../src/lib/credits.ts";
 
 let passed = 0;
 let failed = 0;
@@ -681,6 +684,99 @@ test("unrecognized input returns suggestions, no op", () => {
 test("empty input is handled gracefully", () => {
   assert.equal(interpretTurn("").op, null);
   assert.equal(interpretTurn("   ").op, null);
+});
+
+// --- motion-gfx (text → animated overlay primitive) ------------------------------------------------
+
+console.log("\nmotion-gfx.ts");
+test("countdown intro needs no text payload", () => {
+  assert.equal(interpretMotionGfx("add a countdown").kind, "countdown");
+  assert.equal(interpretMotionGfx("3 2 1 intro").kind, "countdown");
+  assert.equal(interpretMotionGfx("three two one").kind, "countdown");
+});
+test("counter parses a numeric range and prefix", () => {
+  const a = interpretMotionGfx("counter from 0 to 1000");
+  assert.equal(a.kind, "counter");
+  assert.equal(a.from, "0");
+  assert.equal(a.to, "1000");
+  const b = interpretMotionGfx("count from $0 to $10000");
+  assert.equal(b.kind, "counter");
+  assert.equal(b.text, "$");
+  assert.equal(b.to, "10000");
+  const c = interpretMotionGfx("Day 1 to 7 counter");
+  assert.equal(c.text, "Day ");
+});
+test("commas are stripped from counter numbers", () => {
+  const a = interpretMotionGfx("count from 1,000 to 1,000,000");
+  assert.equal(a.from, "1000");
+  assert.equal(a.to, "1000000");
+});
+test("title / lower third / location / caption classify with text", () => {
+  assert.equal(interpretMotionGfx('title that says "WELCOME"').kind, "title");
+  assert.equal(interpretMotionGfx('title that says "WELCOME"').text, "WELCOME");
+  const lt = interpretMotionGfx("lower third for Jane Doe, Designer");
+  assert.equal(lt.kind, "lowerThird");
+  assert.equal(lt.text, "Jane Doe");
+  assert.equal(lt.subtext, "Designer");
+  assert.equal(interpretMotionGfx("location card Paris").kind, "location");
+  assert.equal(interpretMotionGfx("location card Paris").text, "Paris");
+  const cap = interpretMotionGfx('caption that says hello there');
+  assert.equal(cap.kind, "caption");
+  assert.equal(cap.text, "hello there");
+});
+test("title style is inferred", () => {
+  assert.equal(interpretMotionGfx('epic title that says "GO"').style, "epic");
+  assert.equal(interpretMotionGfx('typewriter title that says "GO"').style, "typewriter");
+  assert.equal(interpretMotionGfx('title that says "GO"').style, "minimal");
+});
+test("unrecognized description returns null", () => {
+  assert.equal(interpretMotionGfx(""), null);
+  assert.equal(interpretMotionGfx("make it better"), null);
+});
+
+// --- vibe-music (text → score params) --------------------------------------------------------------
+
+console.log("\nvibe-music.ts");
+test("mood keywords map to the right score mood", () => {
+  assert.equal(interpretVibe("epic cinematic trailer").mood, "epic");
+  assert.equal(interpretVibe("chill lo-fi study").mood, "chill");
+  assert.equal(interpretVibe("dark ominous tension").mood, "dark");
+  assert.equal(interpretVibe("upbeat happy pop").mood, "uplift");
+});
+test("unknown vibe defaults to uplift", () => {
+  assert.equal(interpretVibe("something").mood, "uplift");
+});
+test("explicit bpm wins and is clamped", () => {
+  assert.equal(interpretVibe("chill 128 bpm").bpm, 128);
+  assert.equal(interpretVibe("chill 500 bpm").bpm, 160);
+  assert.equal(interpretVibe("chill 10 bpm").bpm, 60);
+});
+test("tempo adjectives nudge the base tempo", () => {
+  assert.ok(interpretVibe("slow chill").bpm < interpretVibe("chill").bpm);
+  assert.ok(interpretVibe("fast chill").bpm > interpretVibe("chill").bpm);
+});
+test("label summarizes mood and tempo", () => {
+  assert.match(interpretVibe("chill").label, /BPM/);
+});
+
+// --- credits checkout math -------------------------------------------------------------------------
+
+console.log("\ncredits.ts (checkout)");
+test("free and byo-key tiers are not checkoutable", () => {
+  const free = PRICING_TIERS.find((t) => t.id === "free");
+  assert.equal(tierCheckout(free), null);
+  const byo = PRICING_TIERS.find((t) => t.byoKey);
+  assert.equal(tierCheckout(byo), null);
+});
+test("paid tiers price in whole cents matching the tier credits", () => {
+  for (const t of PRICING_TIERS) {
+    const c = tierCheckout(t);
+    if (c === null) continue;
+    assert.ok(Number.isInteger(c.amountCents) && c.amountCents > 0);
+    assert.equal(c.credits, t.credits);
+    // "$9" → 900 cents
+    assert.equal(c.amountCents, Math.round(parseFloat(t.price.replace(/[^0-9.]/g, "")) * 100));
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

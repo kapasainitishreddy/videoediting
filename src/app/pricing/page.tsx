@@ -8,13 +8,14 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Check, Gem, Sparkles, Zap } from "lucide-react";
 import { PRICING_TIERS, CREDIT_COSTS, CREDIT_ACTION_LABELS, tierCreditsLabel, type PricingTier, type CreditAction } from "@/lib/credits";
-import { getWallet, onWalletChange, type LedgerEntry } from "@/lib/wallet";
+import { getWallet, onWalletChange, grantCredits, type LedgerEntry } from "@/lib/wallet";
 
 export default function PricingPage() {
   const router = useRouter();
   const [balance, setBalance] = useState<number | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -34,18 +35,85 @@ export default function PricingPage() {
     };
   }, []);
 
-  // Operator: connect Stripe / Lemon Squeezy / Paddle here. On a successful
-  // purchase, call grantCredits(tier.credits, `Purchased ${tier.name}`) from
-  // your webhook/confirmation. Left as a stub so the app ships without keys.
-  function startCheckout(tier: PricingTier) {
+  // On return from Stripe (?checkout=success&session_id=…): verify the
+  // session is paid and, if so, grant its credits to the local wallet —
+  // once. The redeemed session_id is remembered so a refresh or a shared
+  // success URL can't double-credit (the account-less safeguard; see
+  // /api/checkout/verify for the production note).
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const status = url.searchParams.get("checkout");
+    const sessionId = url.searchParams.get("session_id");
+    // clean the query so a refresh doesn't re-trigger
+    const clean = () => window.history.replaceState({}, "", "/pricing");
+    if (status === "cancel") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNote("Checkout cancelled — no charge.");
+      clean();
+      setTimeout(() => setNote(null), 4000);
+      return;
+    }
+    if (status !== "success" || !sessionId) return;
+    const redeemedKey = `viraledit-redeemed-${sessionId}`;
+    if (localStorage.getItem(redeemedKey)) {
+      clean();
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`/api/checkout/verify?session_id=${encodeURIComponent(sessionId)}`);
+        const data = await res.json();
+        if (data.paid && data.credits > 0) {
+          localStorage.setItem(redeemedKey, "1");
+          await grantCredits(data.credits, `Purchased ${data.tier ?? "credits"}`);
+          setNote(`Payment confirmed — ${data.credits.toLocaleString()} credits added. Thank you!`);
+        } else {
+          setNote("We couldn't confirm that payment. If you were charged, contact support with your receipt.");
+        }
+      } catch {
+        setNote("Couldn't verify the payment right now — reload the page or contact support.");
+      } finally {
+        clean();
+        setTimeout(() => setNote(null), 6000);
+      }
+    })();
+  }, []);
+
+  async function startCheckout(tier: PricingTier) {
     if (tier.id === "free") {
       setNote("You're on Free — unlimited editing, plus your starter AI credits.");
-    } else if (tier.byoKey) {
-      setNote("Bring-your-own-key: add your provider key in .env.local and the credit meter turns off entirely.");
-    } else {
-      setNote(`Checkout isn't connected yet. Wire a payment provider in startCheckout() to sell ${tier.name}.`);
+      setTimeout(() => setNote(null), 5000);
+      return;
     }
-    setTimeout(() => setNote(null), 5000);
+    if (tier.byoKey) {
+      setNote("Bring-your-own-key: add your provider key in .env.local and the credit meter turns off entirely.");
+      setTimeout(() => setNote(null), 5000);
+      return;
+    }
+    setBusy(tier.id);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tierId: tier.id }),
+      });
+      const data = await res.json();
+      if (data.available === false) {
+        setNote(data.error ?? "Checkout isn't connected yet — add STRIPE_SECRET_KEY to enable it.");
+        setTimeout(() => setNote(null), 6000);
+      } else if (data.url) {
+        // eslint-disable-next-line react-hooks/immutability
+        window.location.href = data.url; // hand off to Stripe Checkout
+      } else {
+        setNote(data.error ?? "Couldn't start checkout — try again.");
+        setTimeout(() => setNote(null), 6000);
+      }
+    } catch {
+      setNote("Couldn't reach checkout — check your connection and try again.");
+      setTimeout(() => setNote(null), 6000);
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -116,11 +184,18 @@ export default function PricingPage() {
             </ul>
             <button
               onClick={() => startCheckout(tier)}
-              className={`mt-4 w-full rounded-full py-2.5 text-sm font-semibold ${
+              disabled={busy === tier.id}
+              className={`mt-4 w-full rounded-full py-2.5 text-sm font-semibold disabled:opacity-50 ${
                 tier.highlight ? "btn-primary" : "border border-card-border text-neutral-200"
               }`}
             >
-              {tier.id === "free" ? "Your current plan" : tier.byoKey ? "Use my own key" : `Get ${tier.name}`}
+              {busy === tier.id
+                ? "Opening checkout…"
+                : tier.id === "free"
+                  ? "Your current plan"
+                  : tier.byoKey
+                    ? "Use my own key"
+                    : `Get ${tier.name}`}
             </button>
           </div>
         ))}

@@ -37,6 +37,8 @@ import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
 import InsightsPanel from "@/components/InsightsPanel";
 import ChatEdit from "@/components/ChatEdit";
+import { interpretMotionGfx } from "@/lib/motion-gfx";
+import { interpretVibe } from "@/lib/vibe-music";
 import CommandPalette from "@/components/CommandPalette";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
@@ -71,6 +73,9 @@ export default function EditorPage() {
   const [watermark, setWatermark] = useState<{ name: string; blob: Blob } | null>(null);
   const watermarkRef = useRef<HTMLInputElement>(null);
   const [direction, setDirection] = useState("");
+  const [mgInput, setMgInput] = useState("");
+  const [vibeInput, setVibeInput] = useState("");
+  const [genNote, setGenNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [renderPct, setRenderPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -410,6 +415,63 @@ export default function EditorPage() {
       await addDerivedClip(clip, await freezeFrameClip(v.blob, Math.max(0.1, clip.duration / 2), 1.2), "freeze");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Freeze-frame failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // AI motion graphics: describe a graphic in plain English → drive the
+  // existing animated-overlay state (countdown / counter / location / title /
+  // caption). On-device, no model — it burns in at render like any overlay.
+  function handleMotionGfx() {
+    setGenNote(null);
+    const spec = interpretMotionGfx(mgInput);
+    if (!spec) {
+      setGenNote("Try “countdown intro”, “counter from 0 to 1000”, “title that says WELCOME”, or “location card Paris”.");
+      return;
+    }
+    switch (spec.kind) {
+      case "countdown":
+        setCountdownIntro(true);
+        break;
+      case "counter":
+        setCounter({ prefix: spec.text, from: spec.from ?? "", to: spec.to ?? "" });
+        break;
+      case "location":
+        setLocationText(spec.text);
+        break;
+      case "title":
+        setStudio({ titleCard: { title: spec.text, subtitle: "", style: spec.style ?? "minimal" } });
+        break;
+      case "lowerThird":
+        setStudio({ titleCard: { title: spec.text, subtitle: spec.subtext ?? "", style: "minimal" } });
+        break;
+      case "caption":
+        setCaptionText((prev) => (prev.trim() ? `${prev}\n${spec.text}` : spec.text));
+        break;
+    }
+    setMgInput("");
+    setGenNote(`Added ${spec.reason}. It burns in when you render.`);
+  }
+
+  // AI soundtrack from a vibe: describe the mood → compose an original,
+  // length-matched score on-device (procedural, royalty-free, no key).
+  async function handleVibeMusic() {
+    setGenNote(null);
+    if (vibeInput.trim().length < 3) {
+      setGenNote("Describe the vibe — e.g. “chill lo-fi”, “epic cinematic trailer”, or “upbeat pop 128 bpm”.");
+      return;
+    }
+    const vibe = interpretVibe(vibeInput);
+    try {
+      setBusy(`Composing a ${vibe.label} soundtrack…`);
+      const seconds = plan ? estimateOutputDuration(plan.segments) : 20;
+      const blob = await composeScore({ mood: vibe.mood, bpm: vibe.bpm, seconds: Math.max(4, seconds) + 0.5 });
+      setMusic({ name: `AI soundtrack · ${vibe.label}`, blob });
+      setVibeInput("");
+      setGenNote(`Composed a ${vibe.label} track, matched to your edit. Swap or remove it anytime.`);
+    } catch (e) {
+      setGenNote(e instanceof Error ? e.message : "Couldn't compose the soundtrack — try again.");
     } finally {
       setBusy(null);
     }
@@ -1499,6 +1561,59 @@ export default function EditorPage() {
                 if (f) setMusic({ name: f.name, blob: f });
               }}
             />
+          </div>
+
+          {/* Generate (on-device AI) — describe a motion graphic or a soundtrack
+              in plain English; both synthesize locally, no key, no cloud. */}
+          <div className="mt-3 rounded-2xl border border-accent/25 bg-accent/[0.04] p-3">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-accent">
+              <Sparkles size={13} /> Generate — describe it, on-device AI builds it
+            </label>
+
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={mgInput}
+                onChange={(e) => setMgInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleMotionGfx();
+                  }
+                }}
+                placeholder="Motion graphic — e.g. “counter from 0 to 10k”"
+                className="min-w-0 flex-1 rounded-full border border-card-border bg-transparent px-3.5 py-2 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+              />
+              <button
+                onClick={handleMotionGfx}
+                className="shrink-0 rounded-full bg-accent/15 px-3.5 py-2 text-xs font-semibold text-accent"
+              >
+                Add
+              </button>
+            </div>
+
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                value={vibeInput}
+                onChange={(e) => setVibeInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (!busy) handleVibeMusic();
+                  }
+                }}
+                placeholder="Soundtrack — e.g. “epic cinematic trailer”"
+                className="min-w-0 flex-1 rounded-full border border-card-border bg-transparent px-3.5 py-2 text-xs outline-none placeholder:text-neutral-600 focus:border-accent"
+              />
+              <button
+                onClick={handleVibeMusic}
+                disabled={!!busy}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-accent/15 px-3.5 py-2 text-xs font-semibold text-accent disabled:opacity-50"
+              >
+                <Music size={12} /> Compose
+              </button>
+            </div>
+
+            {genNote && <p className="mt-2 text-[11px] leading-4 text-neutral-400">{genNote}</p>}
           </div>
 
           {/* Captions */}

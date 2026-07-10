@@ -31,6 +31,7 @@ export const FEATURES: Feature[] = [
   { group: "Direction & Coaching", name: "Plain-English AI direction", status: "working", where: "Editor → Direct the AI" },
   { group: "Direction & Coaching", name: "One-prompt full edit (transitions + SFX + look + score)", status: "working", where: "Editor → Direct the AI — prompt-compiler drives the Studio" },
   { group: "Direction & Coaching", name: "Conversational editing — steer the edit one instruction at a time", status: "working", where: "Editor → Chat edit (below Render)" },
+  { group: "Direction & Coaching", name: "Describe a motion graphic → animated overlay (title / lower third / counter / countdown / location / caption)", status: "working", where: "Editor → Generate → motion graphic input (on-device, no key)" },
   { group: "Direction & Coaching", name: "Voice-directed editing", status: "working", where: "Editor → mic button (Chrome/Safari)" },
   { group: "Direction & Coaching", name: "Step-by-step recreation guide", status: "working", where: "Analyze → How to recreate it" },
   { group: "Direction & Coaching", name: "Shot list generator", status: "working", where: "Analyze → Shot list" },
@@ -137,7 +138,7 @@ export const FEATURES: Feature[] = [
   { group: "Business & Access", name: "Credits + pricing page (4 tiers)", status: "working", where: "/pricing — balance chip on Home & Editor" },
   { group: "Business & Access", name: "Fair AI billing (charge only if the AI ran, auto-refund)", status: "working", where: "wallet.withCredit — spend + refund-if-unavailable" },
   { group: "Business & Access", name: "Bring-your-own AI key (meter off)", status: "working", where: "Studio tier — any provider key in .env.local" },
-  { group: "Business & Access", name: "Payment checkout", status: "roadmap", where: "startCheckout() stub — wire Stripe/Lemon/Paddle" },
+  { group: "Business & Access", name: "Payment checkout (Stripe) — buy AI credits, verified on return", status: "working", where: "Pricing → Get a plan (activates when STRIPE_SECRET_KEY is set)" },
   { group: "Business & Access", name: "Server-side credit enforcement", status: "roadmap", where: "mirror spend at /api boundary for paid tiers" },
 
   // ---------- Retention & hooks (v2 drop) ----------
@@ -209,6 +210,7 @@ export const FEATURES: Feature[] = [
   { group: "Pro Audio", name: "Platform loudness targets (TikTok/YT/podcast LUFS)", status: "working", where: "Editor → Pro Tools → Audio & Rights" },
   { group: "Pro Audio", name: "AI voiceover narration (text → speech)", status: "key", where: "Editor → Pro Tools → AI Voiceover (MINIMAX_API_KEY)" },
   { group: "Pro Audio", name: "Procedural foley cues from motion energy", status: "working", where: "foley.foleyCues — surfacing UI soon" },
+  { group: "Pro Audio", name: "Describe a vibe → original royalty-free soundtrack, length-matched", status: "working", where: "Editor → Generate → soundtrack input (on-device composer, no key)" },
 
   // ---------- Creator growth ----------
   { group: "Creator Growth", name: "Hook writer — niche-tuned opening lines with the why", status: "working", where: "Editor → Pro Tools → Hook Writer" },

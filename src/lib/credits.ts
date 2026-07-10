@@ -131,3 +131,14 @@ export const PRICING_TIERS: PricingTier[] = [
 export function tierCreditsLabel(tier: PricingTier): string {
   return tier.byoKey || tier.credits === 0 ? "Unlimited AI" : `${tier.credits.toLocaleString()} credits`;
 }
+
+// Purchasable amount for a tier: dollar price → integer cents, plus the credit
+// grant. Returns null for the free tier and the bring-your-own-key tier (both
+// non-purchasable). Pure so the checkout route and tests share one source of
+// truth for how a tier's price string becomes a Stripe amount.
+export function tierCheckout(tier: PricingTier): { amountCents: number; credits: number } | null {
+  if (tier.id === "free" || tier.byoKey) return null;
+  const dollars = parseFloat(tier.price.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(dollars) || dollars <= 0) return null;
+  return { amountCents: Math.round(dollars * 100), credits: tier.credits };
+}
