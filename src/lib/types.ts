@@ -12,7 +12,13 @@ export type TransitionType =
   | "slide-left"
   | "slide-right"
   | "blur"
-  | "light-leak";
+  | "light-leak"
+  | "dip-black"
+  | "dissolve"
+  | "radial-wipe"
+  | "squeeze"
+  | "luma-slice"
+  | "iris";
 
 export interface DetectedTransition {
   id: string;
