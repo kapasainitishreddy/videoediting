@@ -36,6 +36,7 @@ import { checkClipLimits } from "@/lib/limits";
 import { reportError } from "@/lib/report-error";
 import StudioPanel from "@/components/StudioPanel";
 import InsightsPanel from "@/components/InsightsPanel";
+import ChatEdit from "@/components/ChatEdit";
 import CommandPalette from "@/components/CommandPalette";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
@@ -1681,6 +1682,7 @@ export default function EditorPage() {
               <video src={draftUrl} controls playsInline className="mx-auto max-h-72 rounded-lg" />
             </div>
           )}
+          <ChatEdit onRender={handleRender} busy={busy} setBusy={setBusy} />
           <InsightsPanel />
         </section>
       )}

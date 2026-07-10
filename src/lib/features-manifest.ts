@@ -30,6 +30,7 @@ export const FEATURES: Feature[] = [
   // ---------- Direction & coaching ----------
   { group: "Direction & Coaching", name: "Plain-English AI direction", status: "working", where: "Editor → Direct the AI" },
   { group: "Direction & Coaching", name: "One-prompt full edit (transitions + SFX + look + score)", status: "working", where: "Editor → Direct the AI — prompt-compiler drives the Studio" },
+  { group: "Direction & Coaching", name: "Conversational editing — steer the edit one instruction at a time", status: "working", where: "Editor → Chat edit (below Render)" },
   { group: "Direction & Coaching", name: "Voice-directed editing", status: "working", where: "Editor → mic button (Chrome/Safari)" },
   { group: "Direction & Coaching", name: "Step-by-step recreation guide", status: "working", where: "Analyze → How to recreate it" },
   { group: "Direction & Coaching", name: "Shot list generator", status: "working", where: "Analyze → Shot list" },

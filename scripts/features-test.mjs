@@ -26,6 +26,7 @@ import {
 import { energyEnvelope, crossCorrelate, alignByAudio, detectRepeatTakes } from "../src/lib/sync.ts";
 import { shotQuality, reshootScore } from "../src/lib/reshoot.ts";
 import { frameSignature as fsig } from "../src/lib/similarity.ts";
+import { interpretTurn } from "../src/lib/chat-edit.ts";
 
 let passed = 0;
 let failed = 0;
@@ -630,6 +631,56 @@ test("reshootScore picks the better take with a verdict", () => {
   assert.ok(r.scoreCurr > r.scorePrev);
   assert.match(r.verdict, /reshoot is better/i);
   assert.equal(r.deltas.length, 4);
+});
+
+// --- chat-edit (conversational turn interpreter) ---------------------------------------------------
+
+console.log("\nchat-edit.ts");
+test("structural commands classify to the right op", () => {
+  assert.equal(interpretTurn("cut the silences").op.kind, "tighten");
+  assert.equal(interpretTurn("remove the dead air").op.kind, "tighten");
+  assert.equal(interpretTurn("add some b-roll cutaways").op.kind, "cutaways");
+  assert.equal(interpretTurn("cut to whoever's talking").op.kind, "speakerCut");
+  assert.equal(interpretTurn("loop the ending").op.kind, "callback");
+  assert.equal(interpretTurn("undo that").op.kind, "undo");
+  assert.equal(interpretTurn("start over").op.kind, "reset");
+  assert.equal(interpretTurn("render it").op.kind, "render");
+});
+test("length parses digits and words", () => {
+  const a = interpretTurn("make it 30 seconds");
+  assert.equal(a.op.kind, "length");
+  assert.equal(a.op.seconds, 30);
+  assert.equal(interpretTurn("cut it to 15s").op.seconds, 15);
+  assert.equal(interpretTurn("make it a minute").op.seconds, 60);
+});
+test("hook variants distinguish tight / swap / teaser", () => {
+  assert.equal(interpretTurn("tighten the intro").op.variant, "tight");
+  assert.equal(interpretTurn("swap the opening shot").op.variant, "swapped");
+  assert.equal(interpretTurn("tease the ending first").op.variant, "teaser");
+});
+test("pacing tightens without a look change", () => {
+  const p = interpretTurn("make the cuts snappier");
+  assert.equal(p.op.kind, "pace");
+  assert.ok(p.op.tightenTo < 1);
+});
+test("style turns fall through to the compiler", () => {
+  const s = interpretTurn("make it cinematic and moody");
+  assert.equal(s.op.kind, "style");
+  assert.ok(s.op.compiled.notes.length > 0);
+});
+test("render is not triggered by 'make it <style>'", () => {
+  // "make it moody" must be a style op, not a render — the render regex must
+  // not swallow the common "make it ___" phrasing
+  assert.equal(interpretTurn("make it moody").op.kind, "style");
+});
+test("unrecognized input returns suggestions, no op", () => {
+  const u = interpretTurn("asdfghjkl");
+  assert.equal(u.op, null);
+  assert.ok(Array.isArray(u.suggestions) && u.suggestions.length >= 3);
+});
+test("empty input is handled gracefully", () => {
+  assert.equal(interpretTurn("").op, null);
+  assert.equal(interpretTurn("   ").op, null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
