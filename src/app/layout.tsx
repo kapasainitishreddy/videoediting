@@ -19,6 +19,7 @@ export const metadata: Metadata = {
   description:
     "Paste any reel and get the exact cut map, transitions, and beat sync — frame by frame. Then let AI edit your clips to match.",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "ViralEdit AI" },
+  icons: { apple: "/icons/apple-touch-icon.png" },
 };
 
 // No maximumScale/userScalable lock: blocking pinch-zoom is an
