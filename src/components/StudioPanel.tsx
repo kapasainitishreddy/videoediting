@@ -15,7 +15,8 @@ import { FILM_STOCKS, GENRE_LOOKS, cinematicify, DEFAULT_LOOK } from "@/lib/cine
 import { OVERLAY_LABELS, type OverlayType } from "@/lib/overlays";
 import { studioToCode, studioFromCode } from "@/lib/creator-kit";
 import type { MotionEffect } from "@/lib/motion";
-import type { ScoreMood } from "@/lib/audio-cinema";
+import type { ScoreMood, AmbienceType } from "@/lib/audio-cinema";
+import { AMBIENCE_LABELS } from "@/lib/audio-cinema";
 
 const MOTION_OPTIONS: { id: MotionEffect; label: string }[] = [
   { id: "none", label: "None" },
@@ -248,6 +249,12 @@ export default function StudioPanel() {
               Finds the face in each shot (on-device ML) and zooms the camera toward it — CapCut-style auto zoom.
             </p>
           )}
+          <Toggle label="Motion-blur speed ramps" value={studio.motionBlur} onChange={(v) => setStudio({ motionBlur: v })} />
+          {studio.motionBlur && (
+            <p className="mt-1 text-[10px] text-neutral-600">
+              Frame-blends any sped-up or slowed-down shot so speed ramps read as filmic blur instead of a stutter.
+            </p>
+          )}
         </div>
       </Section>
 
@@ -284,6 +291,14 @@ export default function StudioPanel() {
           ))}
         </div>
         <p className="mt-1 text-[10px] text-neutral-600">Synthesized on-device, matched to your edit&apos;s BPM. Uploaded music wins if both are set.</p>
+        <p className="mb-1.5 mt-3 text-[10px] uppercase tracking-wider text-neutral-600">Ambience bed (scene type)</p>
+        <div className="flex flex-wrap gap-1.5">
+          <Chip active={studio.ambience === null} onClick={() => setStudio({ ambience: null })}>Off</Chip>
+          {(Object.keys(AMBIENCE_LABELS) as AmbienceType[]).map((a) => (
+            <Chip key={a} active={studio.ambience === a} onClick={() => setStudio({ ambience: a })}>{AMBIENCE_LABELS[a]}</Chip>
+          ))}
+        </div>
+        <p className="mt-1 text-[10px] text-neutral-600">A quiet atmosphere layer synthesized on-device and mixed under the music/voice.</p>
         <div className="mt-2">
           <Toggle label="Auto sound FX on transitions" value={studio.autoSfx} onChange={(v) => setStudio({ autoSfx: v })} />
         </div>

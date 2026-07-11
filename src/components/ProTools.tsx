@@ -179,6 +179,10 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [libSaveName, setLibSaveName] = useState("");
   const [libQuery, setLibQuery] = useState("");
+  // AI Frame Studio (key-gated cloud image edits on a still frame)
+  const [frameSrc, setFrameSrc] = useState<string | null>(null);
+  const [frameOut, setFrameOut] = useState<string | null>(null);
+  const [frameTask, setFrameTask] = useState<"sky" | "relight" | "inpaint" | "eyecontact" | "outpaint">("sky");
   useEffect(() => {
     listLibraryItems().then(setLibrary).catch(() => {});
   }, []);
@@ -278,6 +282,37 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
       for (const it of res.items) await saveLibraryItem(it).catch(() => {});
       setLibrary(merged);
       say(`Imported ${res.items.length} library item${res.items.length === 1 ? "" : "s"}.`);
+    });
+
+  // ---- AI Frame Studio: key-gated cloud image edits on a still frame --------------------------
+  const loadFrame = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      setFrameSrc(typeof reader.result === "string" ? reader.result : null);
+      setFrameOut(null);
+    };
+    reader.readAsDataURL(file);
+  };
+  const FRAME_TASKS: { id: typeof frameTask; label: string }[] = [
+    { id: "sky", label: "Sky replace" },
+    { id: "relight", label: "Relight" },
+    { id: "inpaint", label: "Remove object" },
+    { id: "eyecontact", label: "Eye contact" },
+    { id: "outpaint", label: "Outpaint 9:16" },
+  ];
+  const runFrameEdit = () =>
+    run("AI is editing the frame…", async () => {
+      if (!frameSrc) return fail("Pick a frame or cover image first.");
+      const res = await fetch("/api/image-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: frameTask, imageB64: frameSrc }),
+      });
+      const data = await res.json();
+      if (data.available === false) return fail(data.error ?? "Add FAL_KEY in .env.local to enable AI frame edits.");
+      if (!data.imageUrl) return fail(data.error ?? "The edit failed — try another frame.");
+      setFrameOut(data.imageUrl);
+      say("Frame edited. Download it, or use it as a cover / title background / B-roll still.");
     });
 
   // ---- cut cleanup -----------------------------------------------------------
@@ -1278,6 +1313,60 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
           </ul>
         ) : (
           <p className="mt-2 text-[10px] text-neutral-600">Your library is empty — save a look or brand kit to start your reusable kit.</p>
+        )}
+      </Section>
+
+      <Section icon={<Sparkle size={14} className="text-accent" />} title="AI Frame Studio">
+        <p className="mb-2 text-[10px] leading-4 text-neutral-500">
+          Generative edits that need a bigger model than runs on-device — sky replacement, relighting, object removal,
+          eye-contact, and outpainting — applied to a still frame (a cover, title background, or B-roll plate).
+          Needs <span className="text-neutral-300">FAL_KEY</span> in <span className="text-neutral-300">.env.local</span>.
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <label className={`${btn} cursor-pointer`}>
+            <span className="flex items-center gap-1"><Upload size={12} /> Pick a frame</span>
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) loadFrame(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {FRAME_TASKS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setFrameTask(t.id)}
+              className={`rounded-full px-3 py-1.5 text-xs ${frameTask === t.id ? "bg-accent/15 font-semibold text-accent" : "border border-card-border text-neutral-400"}`}
+            >
+              {t.label}
+            </button>
+          ))}
+          <button className={btn} disabled={!frameSrc || !!busy} onClick={runFrameEdit}>Apply AI edit</button>
+        </div>
+        {(frameSrc || frameOut) && (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {frameSrc && (
+              <div>
+                <p className="mb-1 text-[10px] text-neutral-600">Source</p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={frameSrc} alt="source frame" className="w-full rounded-lg border border-card-border" />
+              </div>
+            )}
+            {frameOut && (
+              <div>
+                <p className="mb-1 text-[10px] text-neutral-600">Edited</p>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={frameOut} alt="edited frame" className="w-full rounded-lg border border-accent" />
+                <a href={frameOut} download="frame-edit.png" target="_blank" rel="noreferrer" className="mt-1 block text-[11px] font-semibold text-accent">
+                  Download edited frame
+                </a>
+              </div>
+            )}
+          </div>
         )}
       </Section>
     </section>

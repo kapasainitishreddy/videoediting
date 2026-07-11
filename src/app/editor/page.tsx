@@ -14,7 +14,7 @@ import { measureColor, normalizeFilter } from "@/lib/cinematic";
 import { analyzeClip, type ClipAnalysis } from "@/lib/clip-analysis";
 import { isStaticShot, motionCentroidX, reframeFilter } from "@/lib/motion";
 import { generateOverlayClip } from "@/lib/overlays";
-import { composeScore, mixTimeline, SFX_FOR_TRANSITION, type SfxType } from "@/lib/audio-cinema";
+import { composeScore, composeAmbience, mixTimeline, SFX_FOR_TRANSITION, AMBIENCE_LABELS, type SfxType } from "@/lib/audio-cinema";
 import { compileDirection, applyPlanOps, mergeCompiled, type CompiledDirection } from "@/lib/prompt-compiler";
 import { resolveTransitionSfx } from "@/lib/sfx-web";
 import { applyTaste, restrainSfx, cleanCaptionWindows } from "@/lib/taste";
@@ -57,7 +57,7 @@ export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const musicRef = useRef<HTMLInputElement>(null);
-  const { blueprint, clips, setClips, addClip, updateClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio, setStudio } = useProject();
+  const { blueprint, clips, setClips, addClip, updateClip, removeClip, plan, setPlan, undoPlan, planHistory, setRenderedUrl, studio, setStudio, skillLevel, setSkillLevel } = useProject();
 
   const [music, setMusic] = useState<{ name: string; blob: Blob } | null>(null);
   const [beats, setBeats] = useState<BeatResult | null>(null);
@@ -820,7 +820,7 @@ export default function EditorPage() {
 
       // Watch-muted mode: with no music and no score, most viewers will see
       // this silent — kinetic word-pops keep it legible with the sound off.
-      const willHaveAudio = !!music || !!studio2.scoreMood;
+      const willHaveAudio = !!music || !!studio2.scoreMood || !!studio2.ambience;
       let useKinetic = studio2.kineticCaptions;
       const lines = captionText.split("\n").map((l) => l.trim()).filter(Boolean);
       if (!willHaveAudio && lines.length > 0 && !useKinetic) {
@@ -1102,9 +1102,21 @@ export default function EditorPage() {
           // ambience is optional
         }
       }
-      if (finalAudio || sfxCues.length > 0) {
+      // Scene-type ambience bed (rain / forest / room / city / ocean / drone),
+      // synthesized on-device and mixed quietly under everything.
+      let ambienceBlob: Blob | undefined;
+      if (studio2.ambience) {
+        setStage("Laying in ambience…");
+        try {
+          ambienceBlob = await composeAmbience(studio2.ambience, outDur + 0.5);
+          featureNotes.push(`${AMBIENCE_LABELS[studio2.ambience]} ambience bed.`);
+        } catch {
+          // ambience is optional — never fail the render over it
+        }
+      }
+      if (finalAudio || sfxCues.length > 0 || ambienceBlob) {
         setStage("Mixing audio…");
-        finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt: sfxCues });
+        finalAudio = await mixTimeline({ seconds: outDur + 0.5, music: finalAudio, sfxAt: sfxCues, ambience: ambienceBlob });
       }
 
       // Fill in the rest of the director's report and publish it.
@@ -1139,6 +1151,7 @@ export default function EditorPage() {
         chromaBgImages: chromaBgImages.size > 0 ? chromaBgImages : undefined,
         lookBySegment: lookBySegment.size > 0 ? lookBySegment : undefined,
         beauty: studio2.beauty > 0 ? studio2.beauty : undefined,
+        motionBlur: studio2.motionBlur || undefined,
         punchBySegment: punchBySegment.size > 0 ? punchBySegment : undefined,
         music: finalAudio,
         captions: burnCaptions.length ? burnCaptions : undefined,
@@ -1457,8 +1470,34 @@ export default function EditorPage() {
         </button>
       </section>
 
+      {/* Progressive skill levels — Beginner streamlines to the essentials;
+          Pro reveals the full Pro Tools drawer. Persisted app-wide. */}
+      <div className="mt-3 flex items-center justify-between rounded-full border border-card-border px-3 py-1.5 text-xs">
+        <span className="text-neutral-500">Editing mode</span>
+        <div className="flex gap-1">
+          {(["beginner", "pro"] as const).map((lvl) => (
+            <button
+              key={lvl}
+              onClick={() => setSkillLevel(lvl)}
+              className={`rounded-full px-3 py-1 font-semibold capitalize ${
+                skillLevel === lvl ? "bg-accent text-white" : "text-neutral-400"
+              }`}
+            >
+              {lvl}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <StudioPanel />
-      <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+      {skillLevel === "pro" ? (
+        <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+      ) : (
+        <p className="mt-3 rounded-xl border border-card-border px-4 py-3 text-center text-[11px] leading-5 text-neutral-500">
+          Beginner mode keeps it simple. Switch to <span className="font-semibold text-accent">Pro</span> above to unlock Pro Tools —
+          cut cleanup, multi-cam, review notes, the shared library, AI Frame Studio and more.
+        </p>
+      )}
 
       {/* Timeline */}
       {plan && (

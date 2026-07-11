@@ -6,7 +6,7 @@ import type { EditBlueprint, EditPlan, UserClip, AnalyzeProgress } from "@/lib/t
 import { DEFAULT_LOOK, type LookConfig } from "@/lib/cinematic";
 import type { MotionEffect } from "@/lib/motion";
 import type { OverlayType } from "@/lib/overlays";
-import type { ScoreMood } from "@/lib/audio-cinema";
+import type { ScoreMood, AmbienceType } from "@/lib/audio-cinema";
 import type { AssetLicense } from "@/lib/media-trust";
 import type { ReviewComment } from "@/lib/review";
 
@@ -18,9 +18,11 @@ export interface StudioConfig {
   autoReframe: boolean; // subject-aware 9:16 crop for landscape clips
   autoFacePunch: boolean; // zoom-in punch targeted at the detected face
   beauty: number; // skin-smoothing strength 0..1 (0 = off)
+  motionBlur: boolean; // frame-blend speed-ramped shots for a filmic blur
   overlay: OverlayType | null;
   overlayOpacity: number;
   scoreMood: ScoreMood | null; // compose an original score at this mood
+  ambience: AmbienceType | null; // scene-type atmosphere bed under the edit
   autoSfx: boolean; // whoosh/impact on transitions
   kineticCaptions: boolean; // word-by-word pop instead of full lines
   titleCard: { title: string; subtitle: string; style: "minimal" | "epic" | "typewriter" } | null;
@@ -35,9 +37,11 @@ export const DEFAULT_STUDIO: StudioConfig = {
   autoReframe: false,
   autoFacePunch: false,
   beauty: 0,
+  motionBlur: false,
   overlay: null,
   overlayOpacity: 0.5,
   scoreMood: null,
+  ambience: null,
   autoSfx: false,
   kineticCaptions: false,
   titleCard: null,
@@ -68,6 +72,10 @@ interface ProjectState {
   // editor computes new arrays with the pure review.ts ops and hands them here.
   comments: ReviewComment[];
   setComments: (comments: ReviewComment[]) => void;
+  // Progressive skill levels: "beginner" streamlines the editor (hides the Pro
+  // Tools drawer); "pro" reveals everything. Persisted app-wide.
+  skillLevel: "beginner" | "pro";
+  setSkillLevel: (level: "beginner" | "pro") => void;
   setBlueprint: (bp: EditBlueprint | null) => void;
   setClips: (clips: UserClip[]) => void;
   addClip: (clip: UserClip) => void;
@@ -97,9 +105,11 @@ export const useProject = create<ProjectState>()(
       studio: DEFAULT_STUDIO,
       assets: [],
       comments: [],
+      skillLevel: "pro",
       addAsset: (a) => set((s) => ({ assets: [...s.assets.filter((x) => x.id !== a.id), a] })),
       removeAsset: (id) => set((s) => ({ assets: s.assets.filter((x) => x.id !== id) })),
       setComments: (comments) => set({ comments }),
+      setSkillLevel: (skillLevel) => set({ skillLevel }),
       setBlueprint: (blueprint) => set({ blueprint }),
       setClips: (clips) => set({ clips }),
       addClip: (clip) => set((s) => ({ clips: [...s.clips, clip] })),
@@ -136,6 +146,7 @@ export const useProject = create<ProjectState>()(
         studio: s.studio,
         assets: s.assets,
         comments: s.comments,
+        skillLevel: s.skillLevel,
       }),
     }
   )

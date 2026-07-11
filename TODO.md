@@ -1,60 +1,64 @@
 # TODO
 
-Source of truth is `src/lib/features-manifest.ts`. Statuses:
-`working` (152) · `key` (9, needs your API key) · `coming-soon` (11) ·
-`roadmap` (7). Update the manifest and this file together.
+Source of truth is `src/lib/features-manifest.ts`. Current status counts:
+**157 working · 15 key (add an API key) · 7 coming-soon · 1 roadmap** (180 total).
+That's **95.6% working today or with a key**. The core pipeline
+(analyze → auto-edit → render → export) is verified end-to-end by
+`npm run test:e2e` (produces a real H.264 MP4).
 
-The collaboration bucket is now **local-first working**: async review notes
-that travel inside the project file, a reusable shared asset library, and
-portable-project handoff all ship today. What remains needs either a realtime
-backend + accounts, or a generative ML model the on-device stack can't run.
-
-## Priority: security
-
-- [ ] **Server-side credit enforcement** (`coming-soon`) — paid-tier AI credits
-      are still only checked client-side (wallet.ts). Mirror the spend check at
-      the `/api/*` boundary before any paid AI call runs.
+What's left genuinely needs infrastructure or a model the on-device stack
+can't provide — nothing here is merely "unbuilt".
 
 ## Coming soon — needs a realtime backend / accounts
 
 - [ ] Live shared cursors (Figma-style co-editing) — realtime sync backend.
-- [ ] Team workspace with roles + cloud-synced library — the on-device shared
-      library ships today; cloud sync + roles are the cloud layer.
-- [ ] Realtime review threads (live comments + @mentions) — async notes ship
-      today; live threads need the collab backend.
+- [ ] Team workspace with roles + cloud-synced library — accounts + storage;
+      the on-device shared library ships today.
+- [ ] Realtime review threads (live comments + @mentions) — async review
+      notes ship today; live threads need the collab backend.
 - [ ] Community template marketplace — your own template library ships today;
       community sharing needs a backend.
-- [ ] Direct in-app upload to TikTok/YouTube — platform OAuth apps.
+- [ ] Server-side credit enforcement — real enforcement needs accounts; paid
+      credits are still checked client-side (the one real security gap).
 
-## Coming soon — UI / pipeline work, no new model needed
+## Coming soon — pipeline work, no new model needed
 
-- [ ] Side-by-side diff view vs. a reference video — synced dual-player UI.
-- [ ] Progressive skill levels (beginner → pro gating).
-- [ ] Live camera overlay while filming — `getUserMedia` recording UI.
-- [ ] AI dubbing (translated voiceover, re-timed) — translation + TTS exist;
-      the re-timing/mux pipeline is the remaining piece.
-- [ ] Ambience beds by scene type — scene classification + procedural bank.
+- [ ] Side-by-side diff vs. reference — synced dual-player UI (deferred to
+      avoid shipping a flaky reference-retrieval path).
+- [ ] AI dubbing (translated voiceover, re-timed) — translation + TTS ship
+      today; the re-timing/mux pipeline is the remaining piece.
 
-## Roadmap — needs a generative/ML model beyond on-device WASM
+## Roadmap — needs a model beyond on-device WASM
 
-- [ ] Sky replacement (segmentation model)
-- [ ] AI relighting (relighting model)
-- [ ] Freeform object removal / inpainting (corner delogo works today)
-- [ ] Eye-contact correction (gaze-redirection model)
-- [ ] Content-aware letterbox fill / true outpainting (blur-fill ships today)
-- [ ] Animated focus pull / rack focus (static portrait DoF ships today)
-- [ ] Motion-blur speed ramps (`minterpolate`) — too slow in single-threaded
-      WASM; revisit with a multi-threaded core.
+- [ ] Animated rack-focus pull — static portrait DoF ships today; an animated
+      pull needs a depth model over time.
+
+## Key-gated cloud (works when the operator adds a key)
+
+`/api/image-edit` (defaults to fal.ai, override with `AI_IMAGE_ENDPOINT`) powers
+AI Frame Studio: sky replacement, relighting, object removal, eye-contact,
+outpainting — applied to a still frame (cover / title bg / B-roll plate).
+Set `FAL_KEY` (or `AI_IMAGE_KEY`) in `.env.local`. Video/voice AI (B-roll,
+voiceover, transcription) use `MINIMAX_API_KEY` / `OPENAI_API_KEY`. Checkout
+uses `STRIPE_SECRET_KEY`. Without a key each feature reports "needs a key" —
+never a broken button.
+
+## Shipped this round (on-device, no key)
+
+- Motion-blur speed ramps (Studio → Camera Motion) — tblend on re-timed shots.
+- Ambience beds by scene type (Studio → Score & Sound) — rain / forest / room
+  / city / ocean / cinematic drone, synthesized on-device.
+- Live camera overlay (`/film`) — getUserMedia + rule-of-thirds + safe-zone
+  guides; records straight onto the timeline.
+- Progressive skill levels (Editor → Editing mode) — Beginner streamlines;
+  Pro reveals the Pro Tools drawer.
+- Post to TikTok/YouTube/IG via the native share sheet (Export → Share).
 
 ## Notes for whoever picks this up
 
-- Pure-lib pattern: logic lives in `src/lib/*.ts` with no `"use client"`/DOM
-  imports so it's unit-testable via `npx tsx scripts/features-test.mjs`
-  (104 tests). New collab logic (`review.ts`, `library.ts`) follows this.
-- Collaboration is local-first by design: notes ride inside the
-  `.viraledit.json` project file (`edl.projectToFile`); the shared library
-  lives in IndexedDB (`storage.ts`, DB v3) and exports as
-  `.viraledit-library.json`. Keep the realtime layer optional so the offline
+- Pure-lib pattern: logic in `src/lib/*.ts` with no `"use client"`/DOM imports
+  so it's unit-testable via `npx tsx scripts/features-test.mjs` (104 tests).
+- Keep any realtime/cloud layer OPTIONAL and key/config-gated so the offline
   APK/PWA never hard-depends on a server.
 - Full regression: `npx tsx scripts/features-test.mjs && npx eslint src
-  scripts --max-warnings=0 && npm run build`.
+  scripts --max-warnings=0 && npm run build && npm run test:e2e`.

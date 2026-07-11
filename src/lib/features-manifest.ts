@@ -36,8 +36,8 @@ export const FEATURES: Feature[] = [
   { group: "Direction & Coaching", name: "Step-by-step recreation guide", status: "working", where: "Analyze → How to recreate it" },
   { group: "Direction & Coaching", name: "Shot list generator", status: "working", where: "Analyze → Shot list" },
   { group: "Direction & Coaching", name: "Explain-this-edit narration", status: "key", where: "richer with MINIMAX/ANTHROPIC/OPENAI key" },
-  { group: "Direction & Coaching", name: "Progressive skill levels", status: "coming-soon", where: "beginner→pro UI gating in progress" },
-  { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "coming-soon", where: "getUserMedia recording UI in progress" },
+  { group: "Direction & Coaching", name: "Progressive skill levels (Beginner / Pro)", status: "working", where: "Editor → Editing mode toggle (Pro reveals Pro Tools)" },
+  { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "working", where: "Home → Film a clip — rule-of-thirds + safe-zone guides, records to your timeline" },
   { group: "Direction & Coaching", name: "Reshoot comparison score", status: "working", where: "Editor → Pro Tools → Reshoot Compare" },
   { group: "Direction & Coaching", name: "Undo history for edits", status: "working", where: "Editor → undo (up to 20 steps)" },
   { group: "Direction & Coaching", name: "Portable project export/import (.viraledit.json)", status: "working", where: "Editor → Pro Tools → Handoff" },
@@ -63,7 +63,7 @@ export const FEATURES: Feature[] = [
   { group: "Camera & Motion", name: "Speed ramps (two-stage)", status: "working", where: "motion.splitForRamp — surfacing UI soon" },
   { group: "Camera & Motion", name: "Subject-aware 9:16 auto-reframe", status: "working", where: "Studio → Subject-aware reframe" },
   { group: "Camera & Motion", name: "Match-cut detector", status: "working", where: "motion.matchCutPairs — surfacing UI soon" },
-  { group: "Camera & Motion", name: "Motion-blur speed ramps (minterpolate)", status: "roadmap", where: "core supports it; too slow in WASM today" },
+  { group: "Camera & Motion", name: "Motion-blur speed ramps", status: "working", where: "Studio → Camera Motion → Motion-blur speed ramps (frame-blend on re-timed shots)" },
 
   // ---------- AI subject tools (on-device ML — MediaPipe) ----------
   { group: "AI Subject Tools", name: "Face lock — crop follows the face (MediaPipe, on-device)", status: "working", where: "Clip card → face icon → Face lock" },
@@ -80,7 +80,7 @@ export const FEATURES: Feature[] = [
   { group: "Composition", name: "Cinema letterbox bars", status: "working", where: "Studio → letterbox toggle" },
   { group: "Composition", name: "Rule-of-thirds guidance", status: "working", where: "part of composition score tips" },
   { group: "Composition", name: "Blur-fill background (fills bars with a defocused copy)", status: "working", where: "Clip card → face icon → Effects → Blur-fill vertical" },
-  { group: "Composition", name: "Content-aware letterbox fill (true outpainting)", status: "roadmap", where: "blur-fill ships today; painting NEW pixels needs a generative model" },
+  { group: "Composition", name: "Content-aware outpainting (fill a 9:16 frame)", status: "key", where: "Editor → Pro Tools → AI Frame Studio → Outpaint (FAL_KEY); blur-fill ships on-device today" },
   { group: "Composition", name: "Depth-of-field simulation (portrait blur)", status: "working", where: "Clip card → face icon → Effects → Portrait blur" },
 
   // ---------- Lens & optics ----------
@@ -90,7 +90,7 @@ export const FEATURES: Feature[] = [
   { group: "Lens & Optics", name: "Film grain", status: "working", where: "Studio → toggle" },
   { group: "Lens & Optics", name: "Halation bloom", status: "working", where: "Studio → toggle" },
   { group: "Lens & Optics", name: "Lens distortion correct/add", status: "working", where: "lenscorrection in anamorphic chain" },
-  { group: "Lens & Optics", name: "Focus pull simulation (animated)", status: "roadmap", where: "static portrait DoF ships today; a rack-focus PULL needs an animated depth model" },
+  { group: "Lens & Optics", name: "Focus pull simulation (animated rack focus)", status: "roadmap", where: "static portrait DoF ships today; an animated rack-focus PULL needs a depth model" },
 
   // ---------- Atmosphere ----------
   { group: "Atmosphere", name: "Rain overlay", status: "working", where: "Studio → Atmosphere" },
@@ -100,8 +100,8 @@ export const FEATURES: Feature[] = [
   { group: "Atmosphere", name: "Light leaks", status: "working", where: "Studio → Atmosphere (plus transition)" },
   { group: "Atmosphere", name: "Tracked-feel lens flare with ghosts", status: "working", where: "Studio → Atmosphere" },
   { group: "Atmosphere", name: "Atmospheric haze grade", status: "working", where: "Studio → haze toggle" },
-  { group: "Atmosphere", name: "Sky replacement", status: "roadmap", where: "needs segmentation model" },
-  { group: "Atmosphere", name: "AI relighting", status: "roadmap", where: "needs a relighting model" },
+  { group: "Atmosphere", name: "Sky replacement (on a frame)", status: "key", where: "Editor → Pro Tools → AI Frame Studio → Sky replace (FAL_KEY)" },
+  { group: "Atmosphere", name: "AI relighting (on a frame)", status: "key", where: "Editor → Pro Tools → AI Frame Studio → Relight (FAL_KEY)" },
 
   // ---------- Sound & score ----------
   { group: "Sound & Score", name: "Original score composition (BPM + mood matched)", status: "working", where: "Studio → Score & Sound — synthesized on-device" },
@@ -111,7 +111,7 @@ export const FEATURES: Feature[] = [
   { group: "Sound & Score", name: "S-curve music ducking under speech", status: "working", where: "audio-cinema.mixTimeline — voiceover UI soon" },
   { group: "Sound & Score", name: "Speech-range detection", status: "working", where: "audio-cinema.speechRanges" },
   { group: "Sound & Score", name: "Beat-locked music swap", status: "working", where: "swap music → Auto-edit re-snaps cuts" },
-  { group: "Sound & Score", name: "Ambience beds by scene type", status: "coming-soon", where: "scene classification + procedural ambience bank in progress" },
+  { group: "Sound & Score", name: "Ambience beds by scene type (rain / forest / room / city / ocean / drone)", status: "working", where: "Studio → Score & Sound → Ambience bed (synthesized on-device)" },
   { group: "Sound & Score", name: "Cloud AI score (MiniMax music)", status: "key", where: "MINIMAX_API_KEY" },
 
   // ---------- Titles & text ----------
@@ -237,12 +237,13 @@ export const FEATURES: Feature[] = [
   { group: "Collaboration & Team", name: "Live shared cursors (Figma-style co-editing)", status: "coming-soon", where: "needs a realtime sync backend + accounts — on the way" },
   { group: "Collaboration & Team", name: "Team workspace with roles + cloud-synced library", status: "coming-soon", where: "the on-device shared library ships today; cloud sync + roles are coming" },
   { group: "Collaboration & Team", name: "Realtime review threads (live comments + @mentions)", status: "coming-soon", where: "async notes ship today; live threads need the collab backend" },
-  { group: "Collaboration & Team", name: "Direct in-app upload to TikTok/YouTube", status: "coming-soon", where: "platform OAuth apps in progress — the OS share sheet covers posting today" },
+  { group: "Collaboration & Team", name: "Post to TikTok / YouTube / IG (native share sheet)", status: "working", where: "Export → Share — hands the .mp4 to the OS share sheet (navigator.share)" },
   { group: "Collaboration & Team", name: "AI dubbing (translated voiceover, re-timed)", status: "coming-soon", where: "translation + TTS exist; the re-timing/mux pipeline is in progress" },
 
-  // ---------- Honest roadmap (needs generative/ML models this on-device stack doesn't have) ----------
-  { group: "Needs ML Models", name: "Eye-contact correction", status: "roadmap", where: "needs a gaze-redirection model" },
-  { group: "Needs ML Models", name: "Freeform object removal (inpainting)", status: "roadmap", where: "corner delogo works today; arbitrary objects need an inpainting model" },
+  // ---------- AI Frame Studio (key-gated cloud edits on a still frame) ----------
+  { group: "AI Frame Studio", name: "AI Frame Studio — cloud generative edits on a cover / plate", status: "key", where: "Editor → Pro Tools → AI Frame Studio (FAL_KEY)" },
+  { group: "AI Frame Studio", name: "Eye-contact correction (on a frame)", status: "key", where: "Editor → Pro Tools → AI Frame Studio → Eye contact (FAL_KEY)" },
+  { group: "AI Frame Studio", name: "Object removal / inpainting (on a frame)", status: "key", where: "Editor → Pro Tools → AI Frame Studio → Remove object (FAL_KEY); corner delogo runs on-device" },
 ];
 
 export const featureCounts = () => {

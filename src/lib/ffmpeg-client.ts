@@ -165,6 +165,7 @@ export interface RenderOptions {
   chromaBgImages?: Map<string, Blob>; // "vset:*" background plates, keyed by bg id
   lookBySegment?: Map<string, string>; // per-segment grade override (adjustment sections)
   beauty?: number; // skin-smoothing strength 0..1 applied to every segment
+  motionBlur?: boolean; // frame-blend sped/slowed shots so speed ramps look filmic
   // Draft mode: 360×640, higher CRF, and the slow overscan filters (zoompan
   // punch-ins / Ken Burns) plus caption/atmosphere passes are skipped — a
   // fast cut preview, not the final picture.
@@ -213,6 +214,10 @@ export async function renderEdit(
 
     await ff.writeFile(`src_${i}.mp4`, await fetchFile(blob));
     const speedFilter = seg.speed !== 1 ? `setpts=${(1 / seg.speed).toFixed(4)}*PTS` : "";
+    // Motion-blur speed ramps: frame-average blend on any re-timed shot so a
+    // speed change reads as filmic blur, not a stutter. Cheap (tblend) unlike
+    // minterpolate — safe in single-threaded WASM. Skipped in draft.
+    const rampBlur = opts.motionBlur && seg.speed !== 1 && !draft ? "tblend=all_mode=average" : "";
     const segDur = (seg.end - seg.start) / seg.speed;
     const effect = opts.motionBySegment?.get(seg.id) ?? opts.motionDefault ?? "none";
     // face punch-in beats the generic motion effect for this segment
@@ -241,6 +246,7 @@ export async function renderEdit(
         `trim=start=${seg.start}:end=${seg.end}`,
         "setpts=PTS-STARTPTS",
         speedFilter,
+        rampBlur,
         reframe,
         ...scaling,
         "fps=30",
@@ -271,6 +277,7 @@ export async function renderEdit(
         `trim=start=${seg.start}:end=${seg.end}`,
         "setpts=PTS-STARTPTS",
         speedFilter,
+        rampBlur,
         reframe,
         ...scaling,
         "fps=30",

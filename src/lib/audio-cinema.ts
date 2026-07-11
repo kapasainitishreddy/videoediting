@@ -107,6 +107,129 @@ export async function composeScore(opts: {
   return audioBufferToWav(rendered);
 }
 
+// --- Ambience beds by scene type --------------------------------------------
+// A procedural atmosphere layer laid quietly under the edit — rain on a
+// window, room tone, forest, city rumble, ocean, or a cinematic drone. All
+// synthesized on-device from filtered noise + slow modulation, so it's
+// length-matched and royalty-free (no sample library to license).
+export type AmbienceType = "rain" | "nature" | "room" | "city" | "ocean" | "cinematic";
+
+export const AMBIENCE_LABELS: Record<AmbienceType, string> = {
+  rain: "Rain / storm",
+  nature: "Forest / nature",
+  room: "Room tone",
+  city: "City / traffic",
+  ocean: "Ocean waves",
+  cinematic: "Cinematic drone",
+};
+
+export async function composeAmbience(type: AmbienceType, seconds: number): Promise<Blob> {
+  const sr = 44100;
+  const secs = Math.max(1, seconds);
+  const ctx = new OfflineAudioContext(1, Math.ceil(sr * secs), sr);
+
+  // shared master with a gentle in/out so the bed never pops
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0, 0);
+  master.gain.linearRampToValueAtTime(0.5, 0.8);
+  master.gain.setValueAtTime(0.5, Math.max(0.8, secs - 0.8));
+  master.gain.linearRampToValueAtTime(0, secs);
+  master.connect(ctx.destination);
+
+  // a 2s noise buffer, looped for the whole bed (cheap + seamless enough)
+  const noiseBuf = ctx.createBuffer(1, sr * 2, sr);
+  const nd = noiseBuf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < nd.length; i++) {
+    const white = Math.random() * 2 - 1;
+    last = (last + 0.02 * white) / 1.02; // brownish — softer, less hissy
+    nd[i] = last * 3.2;
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = noiseBuf;
+  noise.loop = true;
+
+  const tone = ctx.createBiquadFilter();
+  if (type === "rain") {
+    tone.type = "highpass";
+    tone.frequency.value = 1400;
+  } else if (type === "nature") {
+    tone.type = "bandpass";
+    tone.frequency.value = 900;
+    tone.Q.value = 0.5;
+  } else if (type === "city") {
+    tone.type = "lowpass";
+    tone.frequency.value = 500;
+  } else if (type === "ocean") {
+    tone.type = "lowpass";
+    tone.frequency.value = 1100;
+  } else if (type === "room") {
+    tone.type = "lowpass";
+    tone.frequency.value = 320;
+  } else {
+    tone.type = "bandpass";
+    tone.frequency.value = 200;
+    tone.Q.value = 0.7;
+  }
+  const bedGain = ctx.createGain();
+  bedGain.gain.value = type === "room" ? 0.18 : type === "cinematic" ? 0.32 : 0.6;
+  noise.connect(tone);
+  tone.connect(bedGain);
+  bedGain.connect(master);
+  noise.start(0);
+  noise.stop(secs);
+
+  // ocean/rain get slow amplitude swells (waves / gusts) via an LFO on bedGain
+  if (type === "ocean" || type === "rain" || type === "nature") {
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = type === "ocean" ? 0.12 : 0.4;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = type === "ocean" ? 0.28 : 0.14;
+    lfo.connect(lfoGain);
+    lfoGain.connect(bedGain.gain);
+    lfo.start(0);
+    lfo.stop(secs);
+  }
+
+  // cinematic drone: two detuned low sines under the noise for tension
+  if (type === "cinematic") {
+    for (const [semis, det] of [[-24, -6], [-17, 6]] as [number, number][]) {
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.value = NOTE(semis);
+      o.detune.value = det;
+      const g = ctx.createGain();
+      g.gain.value = 0.12;
+      o.connect(g);
+      g.connect(master);
+      o.start(0);
+      o.stop(secs);
+    }
+  }
+
+  // nature: sparse bird-like chirps (deterministic-ish scatter)
+  if (type === "nature") {
+    for (let t = 1.5; t < secs - 0.5; t += 2.3) {
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.setValueAtTime(2600, t);
+      o.frequency.exponentialRampToValueAtTime(3400, t + 0.08);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.05, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      o.connect(g);
+      g.connect(master);
+      o.start(t);
+      o.stop(t + 0.2);
+    }
+  }
+
+  const rendered = await ctx.startRendering();
+  return audioBufferToWav(rendered);
+}
+
 // --- Synthesized SFX bank (#14/#22) -----------------------------------------
 export type SfxType = "whoosh" | "impact" | "glitch" | "riser";
 
@@ -239,6 +362,7 @@ export async function mixTimeline(opts: {
   // synthesized on the fly — so a missing/blocked download never drops the SFX.
   sfxAt?: { time: number; type: SfxType; blob?: Blob }[];
   voiceover?: Blob | null;
+  ambience?: Blob | null; // atmosphere bed, mixed quietly under everything
 }): Promise<Blob> {
   const sr = 44100;
   const ctx = new OfflineAudioContext(2, Math.ceil(sr * Math.max(1, opts.seconds)), sr);
@@ -309,6 +433,30 @@ export async function mixTimeline(opts: {
       // No file (or it failed to decode) → synthesize.
       renderSfxInto(ctx, s.type, s.time, 0.9);
     }
+  }
+
+  if (opts.ambience) {
+    const AC: typeof AudioContext =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const tmp = new AC();
+    let abuf: AudioBuffer;
+    try {
+      abuf = await tmp.decodeAudioData(await opts.ambience.arrayBuffer());
+    } finally {
+      tmp.close();
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = abuf;
+    const g = ctx.createGain();
+    // sits well under music/voice; ducks a touch further under speech
+    g.gain.setValueAtTime(0.35, 0);
+    for (const r of duckRanges) {
+      g.gain.setTargetAtTime(0.18, Math.max(0, r.start - 0.3), 0.15);
+      g.gain.setTargetAtTime(0.35, r.end + 0.1, 0.3);
+    }
+    src.connect(g);
+    g.connect(ctx.destination);
+    src.start(0);
   }
 
   if (opts.voiceover) {

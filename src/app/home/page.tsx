@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Upload, Clapperboard, ChevronRight, Flame, Gem, Heart, Import, ListChecks, Rocket } from "lucide-react";
+import { Link2, Upload, Clapperboard, ChevronRight, Flame, Gem, Heart, Import, ListChecks, Rocket, Video } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, listBlueprints, listFingerprints, saveBlueprint } from "@/lib/storage";
 import { tasteProfile, blueprintFromCode, type Fingerprint } from "@/lib/intelligence";
@@ -294,7 +294,14 @@ export default function Home() {
         </div>
       </section>
 
-      <div className="mt-4 flex gap-2">
+      <button
+        onClick={() => router.push("/film")}
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-card-border py-3 text-xs text-neutral-300"
+      >
+        <Video size={14} className="text-accent" /> Film a clip with framing guides
+      </button>
+
+      <div className="mt-2 flex gap-2">
         <button
           onClick={() => router.push("/features")}
           className="flex flex-1 items-center justify-center gap-2 rounded-full border border-card-border py-3 text-xs text-neutral-400"
