@@ -4,7 +4,7 @@
 // needs an API key; "roadmap" = not built (requires models/services beyond
 // this stack) — listed so the app never pretends.
 
-export type FeatureStatus = "working" | "key" | "roadmap";
+export type FeatureStatus = "working" | "key" | "coming-soon" | "roadmap";
 
 export interface Feature {
   name: string;
@@ -24,8 +24,8 @@ export const FEATURES: Feature[] = [
   { group: "Viral Intelligence", name: "Blueprint share codes (recipe only, no video)", status: "working", where: "Editor → Insights → Copy code · Home → Import" },
   { group: "Viral Intelligence", name: "Preloaded viral templates", status: "working", where: "Home → Start from a viral template" },
   { group: "Viral Intelligence", name: "Batch edit variations (Punchy / Dreamy / Raw)", status: "working", where: "Editor → Insights → Try a different take" },
-  { group: "Viral Intelligence", name: "Side-by-side diff vs reference", status: "roadmap", where: "needs synced dual-player UI" },
-  { group: "Viral Intelligence", name: "Template marketplace", status: "roadmap", where: "needs a community backend" },
+  { group: "Viral Intelligence", name: "Side-by-side diff vs reference", status: "coming-soon", where: "synced dual-player UI in progress" },
+  { group: "Viral Intelligence", name: "Community template marketplace", status: "coming-soon", where: "your own template library ships today; community sharing needs a backend" },
 
   // ---------- Direction & coaching ----------
   { group: "Direction & Coaching", name: "Plain-English AI direction", status: "working", where: "Editor → Direct the AI" },
@@ -36,8 +36,8 @@ export const FEATURES: Feature[] = [
   { group: "Direction & Coaching", name: "Step-by-step recreation guide", status: "working", where: "Analyze → How to recreate it" },
   { group: "Direction & Coaching", name: "Shot list generator", status: "working", where: "Analyze → Shot list" },
   { group: "Direction & Coaching", name: "Explain-this-edit narration", status: "key", where: "richer with MINIMAX/ANTHROPIC/OPENAI key" },
-  { group: "Direction & Coaching", name: "Progressive skill levels", status: "roadmap", where: "UI gating planned" },
-  { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "roadmap", where: "needs getUserMedia recording UI" },
+  { group: "Direction & Coaching", name: "Progressive skill levels", status: "coming-soon", where: "beginner→pro UI gating in progress" },
+  { group: "Direction & Coaching", name: "Live camera overlay while filming", status: "coming-soon", where: "getUserMedia recording UI in progress" },
   { group: "Direction & Coaching", name: "Reshoot comparison score", status: "working", where: "Editor → Pro Tools → Reshoot Compare" },
   { group: "Direction & Coaching", name: "Undo history for edits", status: "working", where: "Editor → undo (up to 20 steps)" },
   { group: "Direction & Coaching", name: "Portable project export/import (.viraledit.json)", status: "working", where: "Editor → Pro Tools → Handoff" },
@@ -111,7 +111,7 @@ export const FEATURES: Feature[] = [
   { group: "Sound & Score", name: "S-curve music ducking under speech", status: "working", where: "audio-cinema.mixTimeline — voiceover UI soon" },
   { group: "Sound & Score", name: "Speech-range detection", status: "working", where: "audio-cinema.speechRanges" },
   { group: "Sound & Score", name: "Beat-locked music swap", status: "working", where: "swap music → Auto-edit re-snaps cuts" },
-  { group: "Sound & Score", name: "Ambience beds by scene type", status: "roadmap", where: "needs scene classification + sound bank" },
+  { group: "Sound & Score", name: "Ambience beds by scene type", status: "coming-soon", where: "scene classification + procedural ambience bank in progress" },
   { group: "Sound & Score", name: "Cloud AI score (MiniMax music)", status: "key", where: "MINIMAX_API_KEY" },
 
   // ---------- Titles & text ----------
@@ -139,7 +139,7 @@ export const FEATURES: Feature[] = [
   { group: "Business & Access", name: "Fair AI billing (charge only if the AI ran, auto-refund)", status: "working", where: "wallet.withCredit — spend + refund-if-unavailable" },
   { group: "Business & Access", name: "Bring-your-own AI key (meter off)", status: "working", where: "Studio tier — any provider key in .env.local" },
   { group: "Business & Access", name: "Payment checkout (Stripe) — buy AI credits, verified on return", status: "working", where: "Pricing → Get a plan (activates when STRIPE_SECRET_KEY is set)" },
-  { group: "Business & Access", name: "Server-side credit enforcement", status: "roadmap", where: "mirror spend at /api boundary for paid tiers" },
+  { group: "Business & Access", name: "Server-side credit enforcement", status: "coming-soon", where: "mirror spend at the /api boundary for paid tiers — in progress" },
 
   // ---------- Retention & hooks (v2 drop) ----------
   { group: "Retention & Hooks", name: "Retention risk heatmap on the timeline", status: "working", where: "Editor → Insights" },
@@ -230,18 +230,25 @@ export const FEATURES: Feature[] = [
   { group: "AI Subject Tools", name: "Privacy blur — a blurred box follows the face", status: "working", where: "Clip card → face icon → Effects → Blur the face" },
   { group: "AI Subject Tools", name: "Split-screen (2-up) + picture-in-picture layouts", status: "working", where: "Editor → Pro Tools → Split Screen & PiP" },
   { group: "AI Subject Tools", name: "Beauty skin-smoothing", status: "working", where: "Studio → Look & Grade → Beauty skin-smoothing" },
+  // ---------- Collaboration & team (local-first today, realtime coming soon) ----------
+  { group: "Collaboration & Team", name: "Async review notes — timestamped comments on the timeline", status: "working", where: "Editor → Collaborate → add a note; travels inside the project file" },
+  { group: "Collaboration & Team", name: "Shared asset library (brand kits, LUTs, looks, caption styles, your templates)", status: "working", where: "Editor → Collaborate → Library; export/import the whole kit" },
+  { group: "Collaboration & Team", name: "Portable project handoff (.viraledit.json round-trips the full edit)", status: "working", where: "Export → Save project · Home → Import project" },
+  { group: "Collaboration & Team", name: "Live shared cursors (Figma-style co-editing)", status: "coming-soon", where: "needs a realtime sync backend + accounts — on the way" },
+  { group: "Collaboration & Team", name: "Team workspace with roles + cloud-synced library", status: "coming-soon", where: "the on-device shared library ships today; cloud sync + roles are coming" },
+  { group: "Collaboration & Team", name: "Realtime review threads (live comments + @mentions)", status: "coming-soon", where: "async notes ship today; live threads need the collab backend" },
+  { group: "Collaboration & Team", name: "Direct in-app upload to TikTok/YouTube", status: "coming-soon", where: "platform OAuth apps in progress — the OS share sheet covers posting today" },
+  { group: "Collaboration & Team", name: "AI dubbing (translated voiceover, re-timed)", status: "coming-soon", where: "translation + TTS exist; the re-timing/mux pipeline is in progress" },
+
+  // ---------- Honest roadmap (needs generative/ML models this on-device stack doesn't have) ----------
   { group: "Needs ML Models", name: "Eye-contact correction", status: "roadmap", where: "needs a gaze-redirection model" },
-  { group: "Needs ML Models", name: "Collaborative review with comments", status: "roadmap", where: "needs a realtime backend — project files + share codes cover handoff today" },
-  { group: "Needs ML Models", name: "Live shared cursors (Figma-style co-editing)", status: "roadmap", where: "needs a realtime sync backend + accounts — deliberately absent from the local-first core" },
-  { group: "Needs ML Models", name: "Team workspace with roles + shared library", status: "roadmap", where: "needs accounts + cloud storage; the portable project file is the handoff today" },
-  { group: "Needs ML Models", name: "Direct in-app upload to TikTok/YouTube", status: "roadmap", where: "needs platform OAuth apps — the OS share sheet covers mobile posting today" },
-  { group: "Needs ML Models", name: "AI dubbing (translated voiceover, timed)", status: "roadmap", where: "translation + TTS both exist — the re-timing/mux pipeline is planned" },
   { group: "Needs ML Models", name: "Freeform object removal (inpainting)", status: "roadmap", where: "corner delogo works today; arbitrary objects need an inpainting model" },
 ];
 
 export const featureCounts = () => {
   const working = FEATURES.filter((f) => f.status === "working").length;
   const key = FEATURES.filter((f) => f.status === "key").length;
+  const comingSoon = FEATURES.filter((f) => f.status === "coming-soon").length;
   const roadmap = FEATURES.filter((f) => f.status === "roadmap").length;
-  return { working, key, roadmap, total: FEATURES.length };
+  return { working, key, comingSoon, roadmap, total: FEATURES.length };
 };

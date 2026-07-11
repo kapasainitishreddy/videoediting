@@ -30,6 +30,12 @@ import { interpretTurn } from "../src/lib/chat-edit.ts";
 import { interpretMotionGfx } from "../src/lib/motion-gfx.ts";
 import { interpretVibe } from "../src/lib/vibe-music.ts";
 import { tierCheckout, PRICING_TIERS } from "../src/lib/credits.ts";
+import {
+  makeComment, addComment, editComment, setResolved, deleteComment, mergeComments, reviewSummary, timecode, formatComment,
+} from "../src/lib/review.ts";
+import {
+  makeItem, addItem, removeItem, renameItem, itemsOfKind, searchItems, libraryStats, exportLibrary, importLibrary, mergeLibrary,
+} from "../src/lib/library.ts";
 
 let passed = 0;
 let failed = 0;
@@ -777,6 +783,123 @@ test("paid tiers price in whole cents matching the tier credits", () => {
     // "$9" → 900 cents
     assert.equal(c.amountCents, Math.round(parseFloat(t.price.replace(/[^0-9.]/g, "")) * 100));
   }
+});
+
+// --- review (async timeline notes) -----------------------------------------------------------------
+
+console.log("\nreview.ts");
+const mk = (time, body, id, createdAt, author = "Alex") => makeComment({ time, author, body }, { id, createdAt });
+test("makeComment normalizes time and author", () => {
+  const c = makeComment({ time: -5, author: "  ", body: " hi " }, { id: "a", createdAt: 1 });
+  assert.equal(c.time, 0);
+  assert.equal(c.author, "Anonymous");
+  assert.equal(c.body, "hi");
+  assert.equal(c.resolved, false);
+});
+test("addComment keeps timeline order", () => {
+  let list = [];
+  list = addComment(list, mk(10, "late", "b", 2));
+  list = addComment(list, mk(2, "early", "a", 1));
+  assert.deepEqual(list.map((c) => c.id), ["a", "b"]);
+});
+test("same-time notes order by createdAt", () => {
+  let list = [];
+  list = addComment(list, mk(5, "second", "b", 20));
+  list = addComment(list, mk(5, "first", "a", 10));
+  assert.deepEqual(list.map((c) => c.id), ["a", "b"]);
+});
+test("edit / resolve / delete", () => {
+  let list = [mk(1, "x", "a", 1)];
+  list = editComment(list, "a", "y");
+  assert.equal(list[0].body, "y");
+  list = setResolved(list, "a", true);
+  assert.equal(list[0].resolved, true);
+  list = deleteComment(list, "a");
+  assert.equal(list.length, 0);
+});
+test("mergeComments dedupes by id, newest write wins", () => {
+  const mine = [mk(1, "mine", "a", 1)];
+  const theirs = [mk(1, "edited", "a", 5), mk(3, "new", "b", 2)];
+  const merged = mergeComments(mine, theirs);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((c) => c.id === "a").body, "edited");
+});
+test("summary counts open/resolved and authors", () => {
+  const list = [mk(1, "a", "a", 1, "Sam"), setResolved([mk(2, "b", "b", 2, "Kai")], "b", true)[0]];
+  const s = reviewSummary(list);
+  assert.equal(s.total, 2);
+  assert.equal(s.open, 1);
+  assert.equal(s.resolved, 1);
+  assert.deepEqual(s.authors, ["Kai", "Sam"]);
+});
+test("timecode + formatComment", () => {
+  assert.equal(timecode(65), "1:05");
+  assert.equal(timecode(4), "0:04");
+  assert.match(formatComment(mk(65, "tighten", "a", 1)), /1:05 · Alex: tighten/);
+});
+
+// --- library (shared asset library) ----------------------------------------------------------------
+
+console.log("\nlibrary.ts");
+const li = (kind, name, id, createdAt, data = {}) => makeItem({ kind, name, data }, { id, createdAt });
+test("makeItem falls back to a kind label when unnamed", () => {
+  const it = makeItem({ kind: "look", name: "  ", data: { grade: "warm" } }, { id: "a", createdAt: 1 });
+  assert.equal(it.name, "Looks & grades");
+});
+test("addItem newest-first, replaces same id", () => {
+  let list = [];
+  list = addItem(list, li("look", "old", "a", 1));
+  list = addItem(list, li("brand", "new", "b", 2));
+  assert.deepEqual(list.map((x) => x.id), ["b", "a"]);
+  list = addItem(list, li("look", "renamed", "a", 9));
+  assert.equal(list.find((x) => x.id === "a").name, "renamed");
+  assert.equal(list.length, 2);
+});
+test("remove / rename / itemsOfKind", () => {
+  let list = [li("look", "L1", "a", 1), li("brand", "B1", "b", 2), li("look", "L2", "c", 3)];
+  assert.equal(itemsOfKind(list, "look").length, 2);
+  list = renameItem(list, "a", "L1b");
+  assert.equal(list.find((x) => x.id === "a").name, "L1b");
+  list = removeItem(list, "b");
+  assert.equal(list.length, 2);
+});
+test("searchItems matches name, tag and kind label", () => {
+  const tagged = makeItem({ kind: "lut", name: "Teal", data: {}, tags: ["cinematic"] }, { id: "a", createdAt: 1 });
+  const list = [tagged, li("brand", "Acme", "b", 2)];
+  assert.equal(searchItems(list, "teal").length, 1);
+  assert.equal(searchItems(list, "cinematic").length, 1);
+  assert.equal(searchItems(list, "LUT").length, 1);
+  assert.equal(searchItems(list, "").length, 2);
+});
+test("libraryStats counts by kind", () => {
+  const list = [li("look", "a", "1", 1), li("look", "b", "2", 2), li("brand", "c", "3", 3)];
+  const s = libraryStats(list);
+  assert.equal(s.total, 3);
+  assert.equal(s.byKind.look, 2);
+  assert.equal(s.byKind.brand, 1);
+});
+test("export → import round-trips valid items", () => {
+  const list = [li("look", "Warm", "a", 1, { grade: "warm" })];
+  const text = exportLibrary(list, 123);
+  const res = importLibrary(text);
+  assert.ok(res.ok);
+  assert.equal(res.items.length, 1);
+  assert.equal(res.items[0].name, "Warm");
+});
+test("import rejects non-library JSON and drops malformed items", () => {
+  assert.equal(importLibrary("nope").ok, false);
+  assert.equal(importLibrary(JSON.stringify({ magic: "x" })).ok, false);
+  const dirty = JSON.stringify({ magic: "viraledit-library", version: 1, exportedAt: 0, items: [{ id: "a", name: "n", kind: "bogus" }, li("look", "ok", "b", 1)] });
+  const res = importLibrary(dirty);
+  assert.ok(res.ok);
+  assert.equal(res.items.length, 1);
+});
+test("mergeLibrary dedupes by id keeping newer", () => {
+  const a = [li("look", "old", "x", 1)];
+  const b = [li("look", "new", "x", 5), li("brand", "y", "y", 2)];
+  const merged = mergeLibrary(a, b);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((x) => x.id === "x").name, "new");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

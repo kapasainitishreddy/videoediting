@@ -6,7 +6,7 @@ import { openDB, type IDBPDatabase } from "idb";
 import type { EditBlueprint, UserClip, EditPlan } from "./types";
 
 const DB_NAME = "viraledit";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 interface StoredVideo {
   id: string;
@@ -27,6 +27,7 @@ function getDB() {
         if (!db.objectStoreNames.contains("plans")) db.createObjectStore("plans", { keyPath: "id" });
         if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings");
         if (!db.objectStoreNames.contains("fingerprints")) db.createObjectStore("fingerprints", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("library")) db.createObjectStore("library", { keyPath: "id" });
       },
     });
   }
@@ -116,6 +117,25 @@ export async function listFingerprints(): Promise<Fingerprint[]> {
   const db = await getDB();
   const all: Fingerprint[] = await db.getAll("fingerprints");
   return all.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+// --- shared asset library (brand kits, LUTs, looks, templates) ---
+import type { LibraryItem } from "./library";
+
+export async function saveLibraryItem(item: LibraryItem) {
+  const db = await getDB();
+  await db.put("library", item);
+}
+
+export async function listLibraryItems(): Promise<LibraryItem[]> {
+  const db = await getDB();
+  const all: LibraryItem[] = await db.getAll("library");
+  return all.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function deleteLibraryItem(id: string) {
+  const db = await getDB();
+  await db.delete("library", id);
 }
 
 // --- the last finished render ---

@@ -8,6 +8,7 @@ import type { MotionEffect } from "@/lib/motion";
 import type { OverlayType } from "@/lib/overlays";
 import type { ScoreMood } from "@/lib/audio-cinema";
 import type { AssetLicense } from "@/lib/media-trust";
+import type { ReviewComment } from "@/lib/review";
 
 // Everything the Cinematic Studio panel controls, passed into renderEdit.
 export interface StudioConfig {
@@ -62,6 +63,11 @@ interface ProjectState {
   assets: AssetLicense[];
   addAsset: (a: AssetLicense) => void;
   removeAsset: (id: string) => void;
+  // Async review notes — timestamped comments anchored on the timeline that
+  // travel inside the exported project file (see edl.projectToFile). The
+  // editor computes new arrays with the pure review.ts ops and hands them here.
+  comments: ReviewComment[];
+  setComments: (comments: ReviewComment[]) => void;
   setBlueprint: (bp: EditBlueprint | null) => void;
   setClips: (clips: UserClip[]) => void;
   addClip: (clip: UserClip) => void;
@@ -90,8 +96,10 @@ export const useProject = create<ProjectState>()(
       renderedUrl: null,
       studio: DEFAULT_STUDIO,
       assets: [],
+      comments: [],
       addAsset: (a) => set((s) => ({ assets: [...s.assets.filter((x) => x.id !== a.id), a] })),
       removeAsset: (id) => set((s) => ({ assets: s.assets.filter((x) => x.id !== id) })),
+      setComments: (comments) => set({ comments }),
       setBlueprint: (blueprint) => set({ blueprint }),
       setClips: (clips) => set({ clips }),
       addClip: (clip) => set((s) => ({ clips: [...s.clips, clip] })),
@@ -113,7 +121,7 @@ export const useProject = create<ProjectState>()(
       setRenderedUrl: (renderedUrl) => set({ renderedUrl }),
       setStudio: (patch) => set((s) => ({ studio: { ...s.studio, ...patch } })),
       resetProject: () =>
-        set({ blueprint: null, clips: [], plan: null, planHistory: [], renderedUrl: null, studio: DEFAULT_STUDIO, assets: [] }),
+        set({ blueprint: null, clips: [], plan: null, planHistory: [], renderedUrl: null, studio: DEFAULT_STUDIO, assets: [], comments: [] }),
     }),
     {
       name: "viraledit-session",
@@ -127,6 +135,7 @@ export const useProject = create<ProjectState>()(
         planHistory: s.planHistory,
         studio: s.studio,
         assets: s.assets,
+        comments: s.comments,
       }),
     }
   )

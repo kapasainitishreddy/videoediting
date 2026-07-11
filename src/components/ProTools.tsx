@@ -12,11 +12,12 @@
 //   Hooks          — niche-tuned opening lines
 //   Text edit      — Descript-style edit-by-transcript (Whisper key)
 //   Handoff        — EDL / FCPXML / .cube LUT / portable project file
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { v4 as uuid } from "uuid";
 import {
   AudioLines, Copy, Download, FileText, Languages, Layers, Mic2, Scissors, SearchCheck,
   ShieldAlert, SlidersHorizontal, Sparkle, Upload, Users, Wand2, ChevronDown, Repeat, GitCompare,
+  MessageSquare, Library, Check, Trash2, Plus,
 } from "lucide-react";
 import { useProject } from "@/store/project";
 import { getVideo, saveClipMeta } from "@/lib/storage";
@@ -37,6 +38,12 @@ import { studioSound } from "@/lib/voice-clean";
 import { frameSignature, averageSignatures, findSimilar, type ClipSignature } from "@/lib/similarity";
 import { parseWhisperWords, fillerRanges, wordCutRanges, transcriptLines, type Word } from "@/lib/transcript-edit";
 import { edlFromPlan, fcpxmlFromPlan, projectToFile, projectFromFile } from "@/lib/edl";
+import { mergeComments, makeComment, addComment, setResolved, deleteComment, reviewSummary, timecode, formatComment, type ReviewComment } from "@/lib/review";
+import {
+  makeItem, addItem, removeItem, searchItems, exportLibrary, importLibrary, mergeLibrary,
+  LIBRARY_KINDS, type LibraryItem, type LibraryKind,
+} from "@/lib/library";
+import { saveLibraryItem, listLibraryItems, deleteLibraryItem } from "@/lib/storage";
 import { transitionByType } from "@/lib/transitions";
 import { gradeToCube, parseCube } from "@/lib/lut";
 import { applyCubeToClip, makeThumbnail } from "@/lib/ffmpeg-client";
@@ -131,7 +138,7 @@ async function clipSignature(clip: UserClip, blob: Blob): Promise<ClipSignature 
 }
 
 export default function ProTools({ music, setMusic, captionLines }: Props) {
-  const { blueprint, clips, setClips, addClip, plan, setPlan, studio, setStudio, setBlueprint, assets, addAsset } = useProject();
+  const { blueprint, clips, setClips, addClip, plan, setPlan, studio, setStudio, setBlueprint, assets, addAsset, comments, setComments } = useProject();
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +172,16 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
   const [reshootA, setReshootA] = useState("");
   const [reshootB, setReshootB] = useState("");
   const [reshoot, setReshoot] = useState<ReshootResult | null>(null);
+  // collaborate: review notes + shared library
+  const [noteAuthor, setNoteAuthor] = useState("");
+  const [noteTime, setNoteTime] = useState("");
+  const [noteBody, setNoteBody] = useState("");
+  const [library, setLibrary] = useState<LibraryItem[]>([]);
+  const [libSaveName, setLibSaveName] = useState("");
+  const [libQuery, setLibQuery] = useState("");
+  useEffect(() => {
+    listLibraryItems().then(setLibrary).catch(() => {});
+  }, []);
 
   const say = (m: string) => {
     setNote(m);
@@ -191,6 +208,77 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
     if (!plan) fail("Auto-edit first — these tools operate on the timeline.");
     return plan;
   };
+
+  // ---- collaborate: review notes ------------------------------------------------------------
+  const addReviewNote = () => {
+    const body = noteBody.trim();
+    if (!body) return fail("Type the note first.");
+    const time = Math.max(0, parseFloat(noteTime) || 0);
+    const c = makeComment({ time, author: noteAuthor, body }, { id: uuid(), createdAt: Date.now() });
+    setComments(addComment(comments, c));
+    setNoteBody("");
+    setNoteTime("");
+    say(`Note added at ${timecode(time)} — it travels inside the exported project file.`);
+  };
+  const exportNotes = () => {
+    if (comments.length === 0) return fail("No notes yet.");
+    const text = comments.map((c) => formatComment(c)).join("\n");
+    download("review-notes.txt", `Review notes\n\n${text}\n`);
+    say("Review notes exported as text.");
+  };
+
+  // ---- collaborate: shared library ----------------------------------------------------------
+  const saveToLibrary = async (kind: LibraryKind, name: string, data: unknown) => {
+    const item = makeItem({ kind, name, data }, { id: uuid(), createdAt: Date.now() });
+    await saveLibraryItem(item);
+    setLibrary((prev) => addItem(prev, item));
+    return item;
+  };
+  const saveLookToLibrary = () =>
+    run("Saving look to library…", async () => {
+      const name = libSaveName.trim() || `${studio.look.grade} look`;
+      await saveToLibrary("look", name, studio.look);
+      setLibSaveName("");
+      say(`Saved “${name}” to your library — reuse it in any project.`);
+    });
+  const saveBrandToLibrary = () =>
+    run("Saving brand kit…", async () => {
+      if (!studio.brandHex.trim()) return fail("Set brand colors in Studio first.");
+      await saveToLibrary("brand", libSaveName.trim() || "Brand kit", { brandHex: studio.brandHex });
+      setLibSaveName("");
+      say("Brand kit saved to your library.");
+    });
+  const applyLibraryItem = (item: LibraryItem) => {
+    if (item.kind === "look") {
+      setStudio({ look: item.data as typeof studio.look });
+      say(`Applied “${item.name}”.`);
+    } else if (item.kind === "brand") {
+      const b = item.data as { brandHex?: string };
+      if (b.brandHex) setStudio({ brandHex: b.brandHex });
+      say(`Applied brand kit “${item.name}”.`);
+    } else {
+      fail("That item type is applied from its own panel.");
+    }
+  };
+  const removeLibraryItem = (id: string) =>
+    run("Removing…", async () => {
+      await deleteLibraryItem(id);
+      setLibrary((prev) => removeItem(prev, id));
+    });
+  const exportLibraryFile = () => {
+    if (library.length === 0) return fail("Your library is empty.");
+    download("kit.viraledit-library.json", exportLibrary(library, Date.now()), "application/json");
+    say(`Exported ${library.length} item${library.length > 1 ? "s" : ""} — share the kit with your team.`);
+  };
+  const importLibraryFile = (file: File) =>
+    run("Importing library…", async () => {
+      const res = importLibrary(await file.text());
+      if (!res.ok) throw new Error(res.error);
+      const merged = mergeLibrary(library, res.items);
+      for (const it of res.items) await saveLibraryItem(it).catch(() => {});
+      setLibrary(merged);
+      say(`Imported ${res.items.length} library item${res.items.length === 1 ? "" : "s"}.`);
+    });
 
   // ---- cut cleanup -----------------------------------------------------------
 
@@ -585,9 +673,12 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
       const merged = [...clips, ...pr.clips.filter((c) => !existing.has(c.id))];
       setClips(merged);
       for (const c of pr.clips) await saveClipMeta(c).catch(() => {});
+      const incomingNotes = pr.comments ?? [];
+      if (incomingNotes.length) setComments(mergeComments(comments, incomingNotes));
       const missing = pr.clips.filter((c) => !existing.has(c.id)).length;
       say(
         `Project restored: plan, studio and blueprint are back.` +
+          (incomingNotes.length ? ` ${incomingNotes.length} review note${incomingNotes.length > 1 ? "s" : ""} imported.` : "") +
           (missing > 0 ? ` ${missing} clip${missing > 1 ? "s" : ""} need their media re-added (files stay on-device, so they don't travel in the file).` : "")
       );
     });
@@ -1005,7 +1096,7 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
             onClick={() =>
               download(
                 "project.viraledit.json",
-                projectToFile({ blueprint, plan, studio, clips, exportedAt: Date.now() }),
+                projectToFile({ blueprint, plan, studio, clips, comments, exportedAt: Date.now() }),
                 "application/json"
               )
             }
@@ -1052,6 +1143,142 @@ export default function ProTools({ music, setMusic, captionLines }: Props) {
           The cut list leaves the app: EDL (universal), FCPXML (Final Cut / Resolve), your grade as an industry .cube LUT, or the whole
           project as a file (media stays on your device — the file carries the recipe, not the footage).
         </p>
+      </Section>
+
+      <Section icon={<MessageSquare size={14} className="text-accent" />} title="Review Notes">
+        <p className="mb-2 text-[10px] leading-4 text-neutral-500">
+          Leave timestamped notes on the edit. They save inside the exported project file — hand the file to a
+          collaborator and they see every note at its timecode. (Live realtime threads are coming soon.)
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <input
+            value={noteTime}
+            onChange={(e) => setNoteTime(e.target.value)}
+            inputMode="decimal"
+            placeholder="0:00 → secs"
+            className="w-20 rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs"
+            aria-label="Note time in seconds"
+          />
+          <input
+            value={noteAuthor}
+            onChange={(e) => setNoteAuthor(e.target.value)}
+            placeholder="Your name"
+            className="w-24 rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs"
+            aria-label="Your name"
+          />
+          <input
+            value={noteBody}
+            onChange={(e) => setNoteBody(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addReviewNote();
+              }
+            }}
+            placeholder="Note — e.g. “tighten this cut”"
+            className="min-w-0 flex-1 rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs"
+            aria-label="Note text"
+          />
+          <button className={btn} onClick={addReviewNote}>
+            <span className="flex items-center gap-1"><Plus size={12} /> Add</span>
+          </button>
+        </div>
+        {comments.length > 0 && (
+          <>
+            <div className="mt-2 flex items-center justify-between text-[10px] text-neutral-500">
+              <span>{reviewSummary(comments).open} open · {reviewSummary(comments).resolved} resolved</span>
+              <button className="underline" onClick={exportNotes}>Export as text</button>
+            </div>
+            <ul className="mt-1.5 flex flex-col gap-1">
+              {comments.map((c: ReviewComment) => (
+                <li key={c.id} className="flex items-start gap-2 rounded-lg border border-card-border px-2.5 py-1.5 text-xs">
+                  <span className="mt-0.5 font-mono text-[10px] text-accent">{timecode(c.time)}</span>
+                  <span className={`min-w-0 flex-1 ${c.resolved ? "text-neutral-600 line-through" : "text-neutral-300"}`}>
+                    <span className="text-neutral-500">{c.author}: </span>{c.body}
+                  </span>
+                  <button
+                    onClick={() => setComments(setResolved(comments, c.id, !c.resolved))}
+                    className={c.resolved ? "text-green-400" : "text-neutral-600"}
+                    aria-label={c.resolved ? "Mark open" : "Mark resolved"}
+                  >
+                    <Check size={13} />
+                  </button>
+                  <button onClick={() => setComments(deleteComment(comments, c.id))} className="text-neutral-600" aria-label="Delete note">
+                    <Trash2 size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </Section>
+
+      <Section icon={<Library size={14} className="text-accent" />} title="Shared Library">
+        <p className="mb-2 text-[10px] leading-4 text-neutral-500">
+          Save the looks, grades and brand kits you reuse, then apply them in any project. Export the whole kit as one
+          file to share with your team. (Cloud-synced team libraries are coming soon.)
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <input
+            value={libSaveName}
+            onChange={(e) => setLibSaveName(e.target.value)}
+            placeholder="Name this preset (optional)"
+            className="min-w-0 flex-1 rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs"
+            aria-label="Library item name"
+          />
+          <button className={btn} disabled={!!busy} onClick={saveLookToLibrary}>Save current look</button>
+          <button className={btn} disabled={!!busy} onClick={saveBrandToLibrary}>Save brand kit</button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <button className={btn} onClick={exportLibraryFile}>
+            <span className="flex items-center gap-1"><Download size={12} /> Export kit</span>
+          </button>
+          <label className={`${btn} cursor-pointer`}>
+            <span className="flex items-center gap-1"><Upload size={12} /> Import kit</span>
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importLibraryFile(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {library.length > 3 && (
+            <input
+              value={libQuery}
+              onChange={(e) => setLibQuery(e.target.value)}
+              placeholder="Filter…"
+              className="w-24 rounded-lg border border-card-border bg-black px-2 py-1.5 text-xs"
+              aria-label="Filter library"
+            />
+          )}
+        </div>
+        {library.length > 0 ? (
+          <ul className="mt-2 flex flex-col gap-1">
+            {searchItems(library, libQuery).map((it) => {
+              const kind = LIBRARY_KINDS.find((k) => k.kind === it.kind);
+              const applicable = it.kind === "look" || it.kind === "brand";
+              return (
+                <li key={it.id} className="flex items-center gap-2 rounded-lg border border-card-border px-2.5 py-1.5 text-xs">
+                  <span>{kind?.emoji ?? "📦"}</span>
+                  <span className="min-w-0 flex-1 truncate text-neutral-300">{it.name}</span>
+                  <span className="text-[10px] text-neutral-600">{kind?.label ?? it.kind}</span>
+                  {applicable && (
+                    <button onClick={() => applyLibraryItem(it)} className="text-accent" disabled={!!busy}>Apply</button>
+                  )}
+                  <button onClick={() => removeLibraryItem(it.id)} className="text-neutral-600" aria-label="Remove from library" disabled={!!busy}>
+                    <Trash2 size={13} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="mt-2 text-[10px] text-neutral-600">Your library is empty — save a look or brand kit to start your reusable kit.</p>
+        )}
       </Section>
     </section>
   );

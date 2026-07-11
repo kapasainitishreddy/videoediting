@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Upload, Clapperboard, ChevronRight, Flame, Gem, Heart, Import, ListChecks } from "lucide-react";
+import { Link2, Upload, Clapperboard, ChevronRight, Flame, Gem, Heart, Import, ListChecks, Rocket } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, listBlueprints, listFingerprints, saveBlueprint } from "@/lib/storage";
 import { tasteProfile, blueprintFromCode, type Fingerprint } from "@/lib/intelligence";
@@ -10,6 +10,7 @@ import { VIRAL_TEMPLATES } from "@/lib/templates";
 import { probeDuration } from "@/lib/ffmpeg-client";
 import { checkReferenceLimits } from "@/lib/limits";
 import { useProject } from "@/store/project";
+import { FEATURES } from "@/lib/features-manifest";
 import CommandPalette from "@/components/CommandPalette";
 import CreditsChip from "@/components/CreditsChip";
 import type { EditBlueprint } from "@/lib/types";
@@ -264,6 +265,33 @@ export default function Home() {
           </button>
         </div>
         <p className="mt-1 text-[10px] text-neutral-500">A friend&apos;s cut recipe — timings and transitions only, no video.</p>
+      </section>
+
+      {/* Coming soon — honest teaser pulled straight from the feature manifest,
+          so this list can never drift from what's really shipping. */}
+      <section className="mt-8">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-neutral-500">
+          <Rocket size={14} className="text-accent" /> Coming soon
+        </h2>
+        <div className="card p-4">
+          <p className="text-xs leading-5 text-neutral-400">
+            Async review notes and a shared asset library ship <span className="text-neutral-200">today</span> — the
+            realtime and cloud layers are next:
+          </p>
+          <ul className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {FEATURES.filter((f) => f.status === "coming-soon")
+              .slice(0, 8)
+              .map((f) => (
+                <li key={f.name} className="flex items-start gap-2 text-[11px] leading-4 text-neutral-300">
+                  <Rocket size={11} className="mt-0.5 shrink-0 text-accent/70" />
+                  {f.name.replace(/\s*\(.*\)$/, "")}
+                </li>
+              ))}
+          </ul>
+          <button onClick={() => router.push("/features")} className="mt-3 text-[11px] font-semibold text-accent">
+            See the full roadmap →
+          </button>
+        </div>
       </section>
 
       <div className="mt-4 flex gap-2">

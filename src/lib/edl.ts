@@ -11,6 +11,7 @@
 // load under plain `node --experimental-strip-types` for the unit suite.
 // The dissolve-duration lookup is injected by the caller (opts.dissolve).
 import type { EditBlueprint, EditPlan, UserClip } from "./types";
+import type { ReviewComment } from "./review";
 
 // --- timecode ------------------------------------------------------------------
 
@@ -151,6 +152,7 @@ export interface PortableProject {
   studio: unknown; // StudioConfig — structural to avoid a store import cycle
   clips: UserClip[]; // metadata only (no media, no thumbnails)
   note?: string;
+  comments?: ReviewComment[]; // async review notes that travel with the project
 }
 
 export function projectToFile(p: {
@@ -160,6 +162,7 @@ export function projectToFile(p: {
   clips: UserClip[];
   exportedAt: number;
   note?: string;
+  comments?: ReviewComment[];
 }): string {
   const out: PortableProject = {
     magic: "viraledit-project",
@@ -170,6 +173,7 @@ export function projectToFile(p: {
     studio: p.studio,
     clips: p.clips.map((c) => ({ ...c, thumbnail: undefined })),
     ...(p.note ? { note: p.note } : {}),
+    ...(p.comments && p.comments.length ? { comments: p.comments } : {}),
   };
   return JSON.stringify(out, null, 2);
 }

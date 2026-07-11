@@ -3,13 +3,14 @@
 // The honest capability list — what works now, what needs a key, what's
 // still roadmap. No fake buttons anywhere in this app.
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle2, KeyRound, Hourglass } from "lucide-react";
+import { ArrowLeft, CheckCircle2, KeyRound, Hourglass, Rocket } from "lucide-react";
 import { FEATURES, featureCounts } from "@/lib/features-manifest";
 
 const BADGE = {
   working: { icon: CheckCircle2, cls: "text-green-400", label: "works now, on-device" },
   key: { icon: KeyRound, cls: "text-yellow-400", label: "wired — add an API key" },
-  roadmap: { icon: Hourglass, cls: "text-neutral-600", label: "roadmap — not built yet" },
+  "coming-soon": { icon: Rocket, cls: "text-accent", label: "coming soon — in progress" },
+  roadmap: { icon: Hourglass, cls: "text-neutral-600", label: "roadmap — needs an ML model" },
 } as const;
 
 export default function FeaturesPage() {
@@ -26,7 +27,8 @@ export default function FeaturesPage() {
         Everything it does<span className="text-accent">.</span>
       </h1>
       <p className="mt-1 text-sm text-neutral-400">
-        {counts.working} working on-device · {counts.key} unlock with an API key · {counts.roadmap} on the roadmap
+        {counts.working} working on-device · {counts.key} unlock with an API key · {counts.comingSoon} coming soon ·{" "}
+        {counts.roadmap} on the roadmap
       </p>
       <div className="mt-3 flex flex-col gap-1 text-[11px] text-neutral-500">
         {(Object.keys(BADGE) as (keyof typeof BADGE)[]).map((k) => {
