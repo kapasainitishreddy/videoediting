@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Captions, Crosshair, Eraser, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Captions, ChevronDown, Crosshair, Eraser, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit, getFFmpeg, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
@@ -53,6 +53,18 @@ const PROMPT_IDEAS = [
   "edgy glitch style",
 ];
 
+// Quick Edit's transition picker — a curated handful, not all 18. "Smart"
+// keeps whatever motion-matched transition smartAutoEdit already chose
+// for each cut; any other choice forces that same style on every cut.
+const QUICK_STYLES: { id: TransitionType | "auto"; label: string; emoji: string }[] = [
+  { id: "auto", label: "Smart (recommended)", emoji: "✨" },
+  { id: "hard-cut", label: "Hard Cut", emoji: "✂️" },
+  { id: "fade", label: "Cross Fade", emoji: "🌫️" },
+  { id: "whip-pan", label: "Whip Pan", emoji: "💨" },
+  { id: "zoom-in", label: "Zoom Punch", emoji: "🔍" },
+  { id: "glitch", label: "Glitch", emoji: "📺" },
+];
+
 export default function EditorPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -73,6 +85,11 @@ export default function EditorPage() {
   const [watermark, setWatermark] = useState<{ name: string; blob: Blob } | null>(null);
   const watermarkRef = useRef<HTMLInputElement>(null);
   const [direction, setDirection] = useState("");
+  // Quick Edit (Beginner mode): pick a transition style, tap once, get a
+  // rendered video — no direction textarea, no Studio panel required.
+  const [quickStyle, setQuickStyle] = useState<TransitionType | "auto">("auto");
+  const [quickPending, setQuickPending] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [mgInput, setMgInput] = useState("");
   const [vibeInput, setVibeInput] = useState("");
   const [genNote, setGenNote] = useState<string | null>(null);
@@ -698,6 +715,26 @@ export default function EditorPage() {
     }
   }
 
+  // One tap: auto-edit with no direction, optionally force every cut to the
+  // chosen transition style (leaving "auto" keeps the motion-matched picks
+  // smartAutoEdit already made), then render as soon as the plan lands.
+  // Reads/writes the store directly (useProject.getState()) rather than the
+  // React-hook `plan` value, which won't reflect setPlan() until the next
+  // render — the effect below picks up the change once that render happens.
+  async function handleQuickCreate() {
+    await handleAutoEdit();
+    const fresh = useProject.getState().plan;
+    if (fresh && quickStyle !== "auto") {
+      const last = fresh.segments.length - 1;
+      const styled = {
+        ...fresh,
+        segments: fresh.segments.map((s, i) => ({ ...s, transitionAfter: i === last ? null : quickStyle })),
+      };
+      useProject.getState().setPlan(styled);
+    }
+    setQuickPending(true);
+  }
+
   // Map a compiled direction onto the Studio config. Only fields the compiler
   // actually set are written (undefined never clobbers a user's toggle), and
   // the look is merged onto the current look rather than replacing it.
@@ -1179,6 +1216,17 @@ export default function EditorPage() {
     }
   }
 
+  // Fires handleRender() once the quick-created plan has propagated to this
+  // render's `plan` closure (handleRender reads `plan`, not the store).
+  useEffect(() => {
+    if (quickPending && plan) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setQuickPending(false);
+      handleRender();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickPending, plan]);
+
   return (
     <main className="flex flex-1 flex-col px-6 pb-10 pt-12">
       <header className="mb-6">
@@ -1414,65 +1462,9 @@ export default function EditorPage() {
         })()}
       </section>
 
-      {/* AI direction */}
-      <section className="card mt-5 p-4">
-        <div className="flex items-center justify-between text-sm font-bold">
-          <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
-          <button
-            onClick={handleVoiceDirection}
-            aria-label="Speak your direction"
-            className={`rounded-full p-2 ${listening ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
-          >
-            <Mic size={14} className={listening ? "pulse-soft" : ""} />
-          </button>
-        </div>
-        <textarea
-          value={direction}
-          onChange={(e) => setDirection(e.target.value)}
-          placeholder="e.g. make it cinematic with smooth transitions, cut on every beat…"
-          rows={2}
-          className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
-        />
-        {/* One-tap genre presets — curated prompts through the same compiler */}
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {GENRE_PRESETS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => applyPreset(p.id)}
-              title={p.tagline}
-              className={`rounded-full px-3 py-1.5 text-xs ${
-                direction === p.direction
-                  ? "bg-accent font-semibold text-white"
-                  : "border border-card-border text-neutral-300"
-              }`}
-            >
-              {p.emoji} {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {PROMPT_IDEAS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setDirection(p)}
-              className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400 active:border-accent"
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={handleAutoEdit}
-          disabled={!!busy || clips.length === 0}
-          className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
-        >
-          <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
-        </button>
-      </section>
-
       {/* Progressive skill levels — Beginner streamlines to the essentials;
-          Pro reveals the full Pro Tools drawer. Persisted app-wide. */}
-      <div className="mt-3 flex items-center justify-between rounded-full border border-card-border px-3 py-1.5 text-xs">
+          Pro reveals the full toolset. Persisted app-wide. */}
+      <div className="mt-5 flex items-center justify-between rounded-full border border-card-border px-3 py-1.5 text-xs">
         <span className="text-neutral-500">Editing mode</span>
         <div className="flex gap-1">
           {(["beginner", "pro"] as const).map((lvl) => (
@@ -1489,14 +1481,173 @@ export default function EditorPage() {
         </div>
       </div>
 
-      <StudioPanel />
-      {skillLevel === "pro" ? (
-        <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+      {skillLevel === "beginner" ? (
+        <>
+          {/* Quick Edit — the whole beginner flow in one card: pick a
+              transition style, tap once, get a rendered video. No direction
+              box, no Studio panel required to see something happen. */}
+          <section className="card mt-3 p-4">
+            <div className="flex items-center gap-2 text-sm font-bold">
+              <Wand2 size={15} className="text-accent" /> Quick Edit
+            </div>
+            <p className="mt-1 text-xs leading-5 text-neutral-500">
+              Pick a transition style — the AI picks the cuts, you pick the look.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {QUICK_STYLES.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setQuickStyle(s.id)}
+                  className={`rounded-full px-3 py-1.5 text-xs ${
+                    quickStyle === s.id ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                  }`}
+                >
+                  {s.emoji} {s.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleQuickCreate}
+              disabled={!!busy || clips.length === 0}
+              className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
+            >
+              <Wand2 size={17} /> {plan ? "Re-create & render" : "Create & render my edit"}
+            </button>
+            {clips.length === 0 && (
+              <p className="mt-2 text-center text-[11px] text-neutral-600">Add a clip above first.</p>
+            )}
+          </section>
+
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="mt-3 flex w-full items-center justify-center gap-1.5 py-2 text-xs font-semibold text-neutral-400"
+          >
+            {showAdvanced ? "Hide" : "Show"} advanced editing
+            <ChevronDown size={13} className={`transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+          </button>
+
+          {showAdvanced && (
+            <>
+              <section className="card mt-2 p-4">
+                <div className="flex items-center justify-between text-sm font-bold">
+                  <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
+                  <button
+                    onClick={handleVoiceDirection}
+                    aria-label="Speak your direction"
+                    className={`rounded-full p-2 ${listening ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
+                  >
+                    <Mic size={14} className={listening ? "pulse-soft" : ""} />
+                  </button>
+                </div>
+                <textarea
+                  value={direction}
+                  onChange={(e) => setDirection(e.target.value)}
+                  placeholder="e.g. make it cinematic with smooth transitions, cut on every beat…"
+                  rows={2}
+                  className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
+                />
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {GENRE_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => applyPreset(p.id)}
+                      title={p.tagline}
+                      className={`rounded-full px-3 py-1.5 text-xs ${
+                        direction === p.direction ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                      }`}
+                    >
+                      {p.emoji} {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {PROMPT_IDEAS.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setDirection(p)}
+                      className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400 active:border-accent"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={handleAutoEdit}
+                  disabled={!!busy || clips.length === 0}
+                  className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
+                >
+                  <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
+                </button>
+              </section>
+              <StudioPanel />
+              <p className="mt-3 rounded-xl border border-card-border px-4 py-3 text-center text-[11px] leading-5 text-neutral-500">
+                Switch to <span className="font-semibold text-accent">Pro</span> above to unlock Pro Tools — cut cleanup,
+                multi-cam, review notes, the shared library, AI Frame Studio and more.
+              </p>
+            </>
+          )}
+        </>
       ) : (
-        <p className="mt-3 rounded-xl border border-card-border px-4 py-3 text-center text-[11px] leading-5 text-neutral-500">
-          Beginner mode keeps it simple. Switch to <span className="font-semibold text-accent">Pro</span> above to unlock Pro Tools —
-          cut cleanup, multi-cam, review notes, the shared library, AI Frame Studio and more.
-        </p>
+        <>
+          {/* AI direction */}
+          <section className="card mt-3 p-4">
+            <div className="flex items-center justify-between text-sm font-bold">
+              <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
+              <button
+                onClick={handleVoiceDirection}
+                aria-label="Speak your direction"
+                className={`rounded-full p-2 ${listening ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
+              >
+                <Mic size={14} className={listening ? "pulse-soft" : ""} />
+              </button>
+            </div>
+            <textarea
+              value={direction}
+              onChange={(e) => setDirection(e.target.value)}
+              placeholder="e.g. make it cinematic with smooth transitions, cut on every beat…"
+              rows={2}
+              className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
+            />
+            {/* One-tap genre presets — curated prompts through the same compiler */}
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {GENRE_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => applyPreset(p.id)}
+                  title={p.tagline}
+                  className={`rounded-full px-3 py-1.5 text-xs ${
+                    direction === p.direction
+                      ? "bg-accent font-semibold text-white"
+                      : "border border-card-border text-neutral-300"
+                  }`}
+                >
+                  {p.emoji} {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {PROMPT_IDEAS.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setDirection(p)}
+                  className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400 active:border-accent"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleAutoEdit}
+              disabled={!!busy || clips.length === 0}
+              className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
+            >
+              <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
+            </button>
+          </section>
+
+          <StudioPanel />
+          <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+        </>
       )}
 
       {/* Timeline */}

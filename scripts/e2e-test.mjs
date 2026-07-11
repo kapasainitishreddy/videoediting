@@ -114,7 +114,11 @@ await page.waitForSelector("img[alt='clip-b.webm']", { timeout: 30000 });
 console.log("   2 clips added with thumbnails");
 
 // ---- 4. AI direction + auto-edit
+// The editor defaults to Beginner mode (Quick Edit — a transition-style
+// picker, no direction box). Switch to Pro to exercise the full direction
+// + Studio + Pro Tools pipeline this test drives.
 console.log("4) auto-editing…");
+await page.click("text=/^pro$/i");
 await page.fill("textarea", "make it smooth and cinematic");
 await page.click("text=Auto-edit my clips");
 await page.waitForSelector("text=Timeline", { timeout: 30000 });

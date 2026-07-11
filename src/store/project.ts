@@ -105,7 +105,9 @@ export const useProject = create<ProjectState>()(
       studio: DEFAULT_STUDIO,
       assets: [],
       comments: [],
-      skillLevel: "pro",
+      // Default to Beginner so a first-time user sees the streamlined
+      // editor, not the full Pro Tools drawer — switch to Pro anytime.
+      skillLevel: "beginner",
       addAsset: (a) => set((s) => ({ assets: [...s.assets.filter((x) => x.id !== a.id), a] })),
       removeAsset: (id) => set((s) => ({ assets: s.assets.filter((x) => x.id !== id) })),
       setComments: (comments) => set({ comments }),
