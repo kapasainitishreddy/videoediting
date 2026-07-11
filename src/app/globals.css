@@ -1,12 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0d0d0d;
-  --foreground: #f5f5f5;
+  /* Deep, slightly blue-black base with layered surfaces for real depth. */
+  --background: #0a0a0c;
+  --foreground: #f6f6f7;
   --accent: #ff5c35;
-  --card: #161616;
-  --card-border: #262626;
-  --muted: #8a8a8a;
+  --accent-2: #ff8a3d; /* warm end of the accent gradient */
+  --card: #151518;
+  --card-2: #1b1b1f; /* raised surface */
+  --card-border: #2a2a30;
+  --muted: #8a8a92;
 }
 
 @theme inline {
@@ -18,22 +21,65 @@
   --color-muted: var(--muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-sora);
 }
 
 html {
   background: var(--background);
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
+  /* A soft radial glow up top gives the flat dark UI some atmosphere. */
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgba(255, 92, 53, 0.08), transparent 60%),
+    var(--background);
+  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: #161616; }
-::-webkit-scrollbar-thumb { background: #ff5c35; border-radius: 3px; }
+/* Headings speak in the display voice, tightened for a confident look. */
+h1, h2, h3 {
+  font-family: var(--font-sora), var(--font-geist-sans), sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Every interactive element eases rather than snaps. */
+button, a, input, textarea, select, [role="button"] {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.12s ease;
+}
+
+/* Keyboard focus is always visible and on-brand (never removed). */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px rgba(255, 92, 53, 0.7);
+  border-radius: 10px;
+}
+
+::selection {
+  background: rgba(255, 92, 53, 0.3);
+  color: #fff;
+}
+
+input, textarea, select {
+  -webkit-appearance: none;
+  appearance: none;
+}
+input::placeholder, textarea::placeholder { color: #6a6a72; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #34343c; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
 /* Diagonal stripe texture from the mockup's REEL PREVIEW card */
 .stripes {
@@ -47,19 +93,31 @@ body {
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: #fff;
   border-radius: 9999px;
   font-weight: 700;
-  transition: transform 0.1s, opacity 0.15s;
+  box-shadow: 0 6px 20px -6px rgba(255, 92, 53, 0.55);
+  transition: transform 0.12s ease, box-shadow 0.18s ease, opacity 0.15s ease;
 }
+.btn-primary:hover { box-shadow: 0 8px 26px -6px rgba(255, 92, 53, 0.7); }
 .btn-primary:active { transform: scale(0.97); }
-.btn-primary:disabled { opacity: 0.4; }
+.btn-primary:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+}
 
 .card {
-  background: var(--card);
+  background: linear-gradient(180deg, var(--card-2), var(--card));
   border: 1px solid var(--card-border);
-  border-radius: 16px;
+  border-radius: 18px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 8px 24px -18px rgba(0, 0, 0, 0.8);
+}
+
+/* Accent-bordered cards get a subtle matching glow. */
+.card.border-accent,
+.border-accent {
+  box-shadow: 0 0 0 1px rgba(255, 92, 53, 0.15), 0 10px 30px -20px rgba(255, 92, 53, 0.5);
 }
 
 @keyframes pulse-soft {
@@ -72,4 +130,31 @@ body {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.slide-up { animation: slide-up 0.35s ease-out both; }
+.slide-up { animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fade-in { animation: fade-in 0.3s ease-out both; }
+
+/* Shimmer for loading/skeleton and progress accents. */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255, 92, 53, 0.18), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

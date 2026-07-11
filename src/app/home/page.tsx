@@ -98,16 +98,18 @@ export default function Home() {
   }
 
   return (
-    <main className="flex flex-1 flex-col px-6 pb-10 pt-14">
-      <header className="mb-8">
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-widest text-accent">ViralEdit AI</span>
+    <main className="fade-in flex flex-1 flex-col px-6 pb-10 pt-14">
+      <header className="slide-up mb-8">
+        <div className="mb-4 flex items-center justify-between">
+          <span className="rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-widest text-accent">
+            ViralEdit AI
+          </span>
           <CreditsChip />
         </div>
-        <h1 className="text-3xl font-extrabold tracking-tight">
+        <h1 className="text-[2.1rem] font-extrabold leading-[1.05]">
           Drop a viral reel<span className="text-accent">.</span>
         </h1>
-        <p className="mt-2 text-neutral-400">
+        <p className="mt-3 text-neutral-400">
           Paste a link or upload a video — AI maps every cut and transition.
         </p>
         <p className="mt-2 text-xs leading-5 text-neutral-500">
@@ -116,7 +118,7 @@ export default function Home() {
       </header>
 
       {/* Paste link */}
-      <div className="card p-4">
+      <div className="card slide-up p-4" style={{ animationDelay: "60ms" }}>
         <div className="flex items-center gap-2 text-sm font-semibold text-neutral-300">
           <Link2 size={16} className="text-accent" /> Paste a link
         </div>
@@ -155,7 +157,8 @@ export default function Home() {
       <button
         onClick={() => fileRef.current?.click()}
         disabled={!!busy}
-        className="stripes flex h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-neutral-700 active:border-accent"
+        className="stripes slide-up flex h-40 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-neutral-700 hover:border-accent/60 active:border-accent active:scale-[0.99]"
+        style={{ animationDelay: "120ms" }}
       >
         <Upload className="text-accent" />
         <span className="font-semibold">Upload from your device</span>
