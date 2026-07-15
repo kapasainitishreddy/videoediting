@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Captions, ChevronDown, Crosshair, Eraser, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Bot, Captions, Crosshair, Eraser, Mic, MoreHorizontal, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit, getFFmpeg, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
@@ -43,6 +43,11 @@ import CommandPalette from "@/components/CommandPalette";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { TransitionType, UserClip } from "@/lib/types";
+import { addClipAsSegment } from "@/lib/timeline-edit";
+import PreviewPlayer from "@/components/PreviewPlayer";
+import Timeline from "@/components/Timeline";
+import AssistantTips from "@/components/AssistantTips";
+import { computeTips, type TipActionKind } from "@/lib/assistant-tips";
 
 const PROMPT_IDEAS = [
   "make it cinematic",
@@ -89,7 +94,6 @@ export default function EditorPage() {
   // rendered video — no direction textarea, no Studio panel required.
   const [quickStyle, setQuickStyle] = useState<TransitionType | "auto">("auto");
   const [quickPending, setQuickPending] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [mgInput, setMgInput] = useState("");
   const [vibeInput, setVibeInput] = useState("");
   const [genNote, setGenNote] = useState<string | null>(null);
@@ -104,6 +108,12 @@ export default function EditorPage() {
   const [draftUrl, setDraftUrl] = useState<string | null>(null); // quick low-res cut preview
   const [listening, setListening] = useState(false);
   const [tasteNotes, setTasteNotes] = useState<string[]>([]);
+  // CapCut-style tab bar: the editor used to be one long AI-gated scroll —
+  // now every tab is reachable regardless of whether an AI edit has run.
+  const [activeTab, setActiveTab] = useState<"edit" | "text" | "effects" | "ai" | "more">("edit");
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
+  const [previewTime, setPreviewTime] = useState(0);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
   // Tracks the last render stage so a mid-pipeline failure tells the user
   // WHICH step broke (captions vs color match vs mux) instead of a bare
   // "render failed" that gives no clue what to retry or report.
@@ -222,6 +232,9 @@ export default function EditorPage() {
         explanation: `Highlight reel: the ${windows.length} strongest moments distilled from ${clip.name} (${clip.duration.toFixed(0)}s → ~12s).`,
       };
       setPlan(p);
+      setPreviewTime(0);
+      setPreviewPlaying(false);
+      setActiveTab("edit");
       await savePlan("current", p);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't distill that clip");
@@ -244,6 +257,17 @@ export default function EditorPage() {
         colorGrade: compiled.plan.colorGrade ?? plan.colorGrade,
         segments: applyPlanOps(plan.segments, compiled.plan),
       });
+    }
+  }
+
+  // Manual timeline: add one clip straight to the cut, no AI pass required.
+  function handleAddToTimeline(clip: UserClip) {
+    const wasEmpty = !plan;
+    setPlan(addClipAsSegment(plan, clip));
+    if (wasEmpty) {
+      setPreviewTime(0);
+      setPreviewPlaying(false);
+      setActiveTab("edit");
     }
   }
 
@@ -707,6 +731,9 @@ export default function EditorPage() {
       }
 
       setPlan(p);
+      setPreviewTime(0);
+      setPreviewPlaying(false);
+      setActiveTab("edit");
       await savePlan("current", p);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Auto-edit failed");
@@ -817,6 +844,68 @@ export default function EditorPage() {
       captionCount,
     });
   }, [plan, studio, clips, captionText, locationText, counter, countdownIntro, progressBar, emojiReacts, watermark, music]);
+
+  // Contextual "what should I do next" tips — reads the current project
+  // state only (clips, trims, music/captions/grade). Not screen vision.
+  // Per-clip motion/shake signals live in analysisRef, a plain ref mutated
+  // by the render/preview passes outside React's render cycle, so they're
+  // deliberately left out of this render-time computation.
+  const assistantTips = useMemo(() => {
+    if (!plan) {
+      return computeTips({
+        clipCount: clips.length,
+        segmentCount: 0,
+        allSegmentsFullLength: true,
+        hasMusic: !!music,
+        hasCaptions: captionText.trim().length > 0,
+        allHardCuts: true,
+        colorGradeSet: false,
+        autoKenBurnsOn: studio.autoKenBurns,
+        stabilizeOn: studio.motionDefault === "stabilize",
+        clipMotion: [],
+      });
+    }
+    return computeTips({
+      clipCount: clips.length,
+      segmentCount: plan.segments.length,
+      allSegmentsFullLength: plan.segments.every((s) => {
+        const clip = clips.find((c) => c.id === s.clipId);
+        return !!clip && s.start === 0 && Math.abs(s.end - clip.duration) < 0.05;
+      }),
+      hasMusic: !!music,
+      hasCaptions: captionText.trim().length > 0,
+      allHardCuts: plan.segments.every((s) => !s.transitionAfter || s.transitionAfter === "hard-cut"),
+      colorGradeSet: studio.look.grade !== "none" || plan.colorGrade !== "none",
+      autoKenBurnsOn: studio.autoKenBurns,
+      stabilizeOn: studio.motionDefault === "stabilize",
+      clipMotion: [],
+      renderLevel: costEstimate?.level,
+    });
+  }, [plan, clips, music, captionText, studio.autoKenBurns, studio.motionDefault, studio.look.grade, costEstimate?.level]);
+
+  function handleTipAction(kind: TipActionKind) {
+    switch (kind) {
+      case "quick-edit":
+        setActiveTab("edit");
+        handleQuickCreate();
+        break;
+      case "enable-ken-burns":
+        setStudio({ autoKenBurns: true });
+        break;
+      case "enable-stabilize":
+        setStudio({ motionDefault: "stabilize" });
+        break;
+      case "add-music":
+        setActiveTab("effects");
+        break;
+      case "add-captions":
+        setActiveTab("text");
+        break;
+      case "open-filters":
+        setActiveTab("effects");
+        break;
+    }
+  }
 
   async function handleRender() {
     if (!plan) return;
@@ -1249,12 +1338,18 @@ export default function EditorPage() {
         <div className="flex gap-3 overflow-x-auto pb-2">
           {clips.map((c) => (
             <div key={c.id} className="relative shrink-0">
-              {c.thumbnail ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={c.thumbnail} alt={c.name} className="h-28 w-20 rounded-xl object-cover" />
-              ) : (
-                <div className="stripes h-28 w-20 rounded-xl" />
-              )}
+              <button
+                onClick={() => handleAddToTimeline(c)}
+                title="Add to timeline"
+                className="block"
+              >
+                {c.thumbnail ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.thumbnail} alt={c.name} className="h-28 w-20 rounded-xl object-cover" />
+                ) : (
+                  <div className="stripes h-28 w-20 rounded-xl" />
+                )}
+              </button>
               <button
                 onClick={() => handleRemoveClip(c.id)}
                 className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800"
@@ -1295,6 +1390,9 @@ export default function EditorPage() {
             <span className="text-[10px]">Add clip</span>
           </button>
         </div>
+        {clips.length > 0 && (
+          <p className="mt-1.5 text-[11px] text-neutral-600">Tap a clip to add it to the timeline.</p>
+        )}
         <input
           ref={fileRef}
           type="file"
@@ -1462,134 +1560,69 @@ export default function EditorPage() {
         })()}
       </section>
 
-      {/* Progressive skill levels — Beginner streamlines to the essentials;
-          Pro reveals the full toolset. Persisted app-wide. */}
-      <div className="mt-5 flex items-center justify-between rounded-full border border-card-border px-3 py-1.5 text-xs">
-        <span className="text-neutral-500">Editing mode</span>
-        <div className="flex gap-1">
-          {(["beginner", "pro"] as const).map((lvl) => (
-            <button
-              key={lvl}
-              onClick={() => setSkillLevel(lvl)}
-              className={`rounded-full px-3 py-1 font-semibold capitalize ${
-                skillLevel === lvl ? "bg-accent text-white" : "text-neutral-400"
-              }`}
-            >
-              {lvl}
-            </button>
-          ))}
-        </div>
+      {/* CapCut-style tab bar — every tab is reachable with or without an AI edit */}
+      <div className="mt-5 grid grid-cols-5 gap-1 rounded-2xl border border-card-border p-1">
+        {(
+          [
+            { id: "edit", label: "Edit", icon: Wand2 },
+            { id: "text", label: "Text", icon: Captions },
+            { id: "effects", label: "Effects", icon: Sparkles },
+            { id: "ai", label: "AI", icon: Bot },
+            { id: "more", label: "More", icon: MoreHorizontal },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex flex-col items-center gap-0.5 rounded-xl py-2 text-[10px] font-semibold ${
+              activeTab === t.id ? "bg-accent text-white" : "text-neutral-400"
+            }`}
+          >
+            <t.icon size={16} />
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {skillLevel === "beginner" ? (
-        <>
-          {/* Quick Edit — the whole beginner flow in one card: pick a
-              transition style, tap once, get a rendered video. No direction
-              box, no Studio panel required to see something happen. */}
-          <section className="card mt-3 p-4">
-            <div className="flex items-center gap-2 text-sm font-bold">
-              <Wand2 size={15} className="text-accent" /> Quick Edit
-            </div>
-            <p className="mt-1 text-xs leading-5 text-neutral-500">
-              Pick a transition style — the AI picks the cuts, you pick the look.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {QUICK_STYLES.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setQuickStyle(s.id)}
-                  className={`rounded-full px-3 py-1.5 text-xs ${
-                    quickStyle === s.id ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
-                  }`}
-                >
-                  {s.emoji} {s.label}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={handleQuickCreate}
-              disabled={!!busy || clips.length === 0}
-              className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
-            >
-              <Wand2 size={17} /> {plan ? "Re-create & render" : "Create & render my edit"}
-            </button>
-            {clips.length === 0 && (
-              <p className="mt-2 text-center text-[11px] text-neutral-600">Add a clip above first.</p>
-            )}
-          </section>
-
+      {/* Edit tab: one-tap AI cut, still fully hand-editable via the Timeline below */}
+      {activeTab === "edit" && (
+        <section className="card mt-3 p-4">
+          <div className="flex items-center gap-2 text-sm font-bold">
+            <Wand2 size={15} className="text-accent" /> Quick Edit
+          </div>
+          <p className="mt-1 text-xs leading-5 text-neutral-500">
+            Pick a transition style — the AI picks the cuts, you pick the look. Or just tap clips above to build the
+            timeline yourself.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {QUICK_STYLES.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setQuickStyle(s.id)}
+                className={`rounded-full px-3 py-1.5 text-xs ${
+                  quickStyle === s.id ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
+                }`}
+              >
+                {s.emoji} {s.label}
+              </button>
+            ))}
+          </div>
           <button
-            onClick={() => setShowAdvanced((v) => !v)}
-            className="mt-3 flex w-full items-center justify-center gap-1.5 py-2 text-xs font-semibold text-neutral-400"
+            onClick={handleQuickCreate}
+            disabled={!!busy || clips.length === 0}
+            className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
           >
-            {showAdvanced ? "Hide" : "Show"} advanced editing
-            <ChevronDown size={13} className={`transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
+            <Wand2 size={17} /> {plan ? "Re-create & render" : "Create & render my edit"}
           </button>
-
-          {showAdvanced && (
-            <>
-              <section className="card mt-2 p-4">
-                <div className="flex items-center justify-between text-sm font-bold">
-                  <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
-                  <button
-                    onClick={handleVoiceDirection}
-                    aria-label="Speak your direction"
-                    className={`rounded-full p-2 ${listening ? "bg-accent text-white" : "border border-card-border text-neutral-400"}`}
-                  >
-                    <Mic size={14} className={listening ? "pulse-soft" : ""} />
-                  </button>
-                </div>
-                <textarea
-                  value={direction}
-                  onChange={(e) => setDirection(e.target.value)}
-                  placeholder="e.g. make it cinematic with smooth transitions, cut on every beat…"
-                  rows={2}
-                  className="mt-3 w-full resize-none rounded-xl border border-card-border bg-black px-4 py-3 text-sm outline-none placeholder:text-neutral-600 focus:border-accent"
-                />
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {GENRE_PRESETS.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => applyPreset(p.id)}
-                      title={p.tagline}
-                      className={`rounded-full px-3 py-1.5 text-xs ${
-                        direction === p.direction ? "bg-accent font-semibold text-white" : "border border-card-border text-neutral-300"
-                      }`}
-                    >
-                      {p.emoji} {p.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {PROMPT_IDEAS.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setDirection(p)}
-                      className="rounded-full border border-card-border px-3 py-1 text-xs text-neutral-400 active:border-accent"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  onClick={handleAutoEdit}
-                  disabled={!!busy || clips.length === 0}
-                  className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-3.5"
-                >
-                  <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
-                </button>
-              </section>
-              <StudioPanel />
-              <p className="mt-3 rounded-xl border border-card-border px-4 py-3 text-center text-[11px] leading-5 text-neutral-500">
-                Switch to <span className="font-semibold text-accent">Pro</span> above to unlock Pro Tools — cut cleanup,
-                multi-cam, review notes, the shared library, AI Frame Studio and more.
-              </p>
-            </>
+          {clips.length === 0 && (
+            <p className="mt-2 text-center text-[11px] text-neutral-600">Add a clip above first.</p>
           )}
-        </>
-      ) : (
+        </section>
+      )}
+
+      {/* AI tab: direct a full re-edit, get contextual tips, or refine turn-by-turn */}
+      {activeTab === "ai" && (
         <>
-          {/* AI direction */}
           <section className="card mt-3 p-4">
             <div className="flex items-center justify-between text-sm font-bold">
               <span className="flex items-center gap-2"><Sparkles size={15} className="text-accent" /> Direct the AI</span>
@@ -1645,85 +1678,85 @@ export default function EditorPage() {
             </button>
           </section>
 
-          <StudioPanel />
-          <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+          <AssistantTips tips={assistantTips} onAction={handleTipAction} />
+          {plan && <ChatEdit onRender={handleRender} busy={busy} setBusy={setBusy} />}
+          <InsightsPanel />
         </>
       )}
 
-      {/* Timeline */}
-      {plan && (
+      {/* Effects tab also mounts the full Cinematic Studio panel */}
+      {activeTab === "effects" && <StudioPanel />}
+
+      {/* More tab: skill level + the Pro Tools drawer */}
+      {activeTab === "more" && (
+        <>
+          <div className="card mt-3 flex items-center justify-between p-3 text-xs">
+            <span className="text-neutral-500">Editing mode</span>
+            <div className="flex gap-1">
+              {(["beginner", "pro"] as const).map((lvl) => (
+                <button
+                  key={lvl}
+                  onClick={() => setSkillLevel(lvl)}
+                  className={`rounded-full px-3 py-1 font-semibold capitalize ${
+                    skillLevel === lvl ? "bg-accent text-white" : "text-neutral-400"
+                  }`}
+                >
+                  {lvl}
+                </button>
+              ))}
+            </div>
+          </div>
+          {skillLevel === "pro" ? (
+            <ProTools music={music} setMusic={setMusic} captionLines={captionText.split("\n").map((l) => l.trim()).filter(Boolean)} />
+          ) : (
+            <p className="mt-3 rounded-xl border border-card-border px-4 py-3 text-center text-[11px] leading-5 text-neutral-500">
+              Switch to <span className="font-semibold text-accent">Pro</span> above to unlock Pro Tools — cut cleanup,
+              multi-cam, review notes, the shared library, AI Frame Studio and more.
+            </p>
+          )}
+        </>
+      )}
+
+      {/* Edit tab: preview + manual timeline (reorder / trim / split / delete) */}
+      {activeTab === "edit" && plan && (
         <section className="mt-5">
           <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-bold">Timeline — tap a transition to change it</h2>
+            <h2 className="text-sm font-bold">Your edit</h2>
             {planHistory.length > 0 && (
               <button onClick={undoPlan} className="text-xs text-neutral-500 underline">undo</button>
             )}
           </div>
           <p className="mb-3 text-xs leading-5 text-neutral-500">{plan.explanation}</p>
-          <div className="flex items-center gap-1 overflow-x-auto pb-2">
-            {plan.segments.map((seg, i) => {
-              const clip = clips.find((c) => c.id === seg.clipId);
-              return (
-                <div key={seg.id} className="flex shrink-0 items-center gap-1">
-                  <div className="relative">
-                    {clip?.thumbnail ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={clip.thumbnail}
-                        alt={`Shot ${i + 1}: ${clip.name}, ${(seg.end - seg.start).toFixed(1)}s`}
-                        className="h-16 w-12 rounded-lg object-cover"
-                      />
-                    ) : (
-                      <div className="stripes h-16 w-12 rounded-lg" />
-                    )}
-                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-0.5 font-mono text-[9px]">
-                      {(seg.end - seg.start).toFixed(1)}s
-                    </span>
-                  </div>
-                  {seg.transitionAfter !== null && (
-                    <button
-                      onClick={() => setPickerFor(i)}
-                      className="flex h-11 w-11 items-center justify-center rounded-full border border-card-border bg-card text-base active:border-accent"
-                      aria-label={`Change transition after shot ${i + 1}, currently ${transitionByType(seg.transitionAfter).label}`}
-                    >
-                      {transitionByType(seg.transitionAfter).emoji}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <PreviewPlayer
+            segments={plan.segments}
+            time={previewTime}
+            playing={previewPlaying}
+            onTimeChange={setPreviewTime}
+            onPlayingChange={setPreviewPlaying}
+          />
+          <Timeline
+            plan={plan}
+            clips={clips}
+            onPlan={setPlan}
+            selectedId={selectedSegmentId}
+            onSelect={setSelectedSegmentId}
+            playheadTime={previewTime}
+            onScrubTo={setPreviewTime}
+            onOpenTransitionPicker={setPickerFor}
+          />
+        </section>
+      )}
+      {activeTab === "edit" && !plan && clips.length > 0 && (
+        <p className="mt-5 text-center text-xs text-neutral-600">
+          Tap a clip above to add it to the timeline, or use Quick Edit below.
+        </p>
+      )}
 
-          {/* Section looks: adjustment-layer-style grade override per shot */}
-          <div className="mt-1 flex items-center gap-1 overflow-x-auto pb-1">
-            <span className="shrink-0 text-[10px] text-neutral-600">Shot looks:</span>
-            {plan.segments.map((seg, i) => (
-              <select
-                key={seg.id}
-                value={seg.look ?? ""}
-                onChange={(e) =>
-                  setPlan({
-                    ...plan,
-                    segments: plan.segments.map((s) => (s.id === seg.id ? { ...s, look: e.target.value || undefined } : s)),
-                  })
-                }
-                aria-label={`Look for shot ${i + 1}`}
-                className="shrink-0 rounded border border-card-border bg-black px-1 py-0.5 text-[10px] text-neutral-400"
-              >
-                <option value="">S{i + 1}: Studio</option>
-                {Object.keys(COLOR_GRADES)
-                  .filter((g) => g !== "none")
-                  .map((g) => (
-                    <option key={g} value={g}>
-                      S{i + 1}: {g}
-                    </option>
-                  ))}
-              </select>
-            ))}
-          </div>
-
+      {/* Effects tab: music, on-device generators, color grade shortcut, Studio */}
+      {activeTab === "effects" && plan && (
+        <section className="mt-3">
           {/* Music */}
-          <div className="mt-3">
+          <div>
             <label className="text-xs font-semibold text-neutral-500">Music</label>
             <div className="mt-1.5 flex items-center gap-2">
               <button
@@ -1805,9 +1838,14 @@ export default function EditorPage() {
 
             {genNote && <p className="mt-2 text-[11px] leading-4 text-neutral-400">{genNote}</p>}
           </div>
+        </section>
+      )}
 
+      {/* Text tab: captions + Overlays+. Title cards / rolling credits live in the Effects tab's Studio panel. */}
+      {activeTab === "text" && plan && (
+        <section className="mt-3">
           {/* Captions */}
-          <div className="mt-3">
+          <div>
             <label className="flex items-center gap-1.5 text-xs font-semibold text-neutral-500">
               <Captions size={13} /> Captions <span className="text-neutral-500">— one line per caption</span>
             </label>
@@ -1911,37 +1949,43 @@ export default function EditorPage() {
               />
             </div>
           </div>
+        </section>
+      )}
 
-          {/* Color grade — a quick-access shortcut for the same grade the
-              Studio's Look & Grade panel controls. renderEdit always uses
-              studio.look.grade when it's set (genre looks/film stocks there
-              win over this simple picker), so this sets BOTH fields and
-              shows active state from studio.look.grade — otherwise picking a
-              grade here would silently do nothing whenever a richer look is
-              already selected in the Studio. */}
-          <div className="mt-3">
-            <label className="text-xs font-semibold text-neutral-500">Color grade</label>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {Object.entries(COLOR_GRADES).map(([key, g]) => (
-                <button
-                  key={key}
-                  onClick={() => {
-                    setPlan({ ...plan, colorGrade: key });
-                    setStudio({ look: { ...studio.look, grade: key } });
-                  }}
-                  className={`rounded-full px-3 py-1 text-xs ${
-                    studio.look.grade === key
-                      ? "bg-accent font-semibold text-white"
-                      : "border border-card-border text-neutral-400"
-                  }`}
-                >
-                  {g.label}
-                </button>
-              ))}
-            </div>
+      {/* Color grade — a quick-access shortcut for the same grade the
+          Studio's Look & Grade panel controls. renderEdit always uses
+          studio.look.grade when it's set (genre looks/film stocks there
+          win over this simple picker), so this sets BOTH fields and
+          shows active state from studio.look.grade — otherwise picking a
+          grade here would silently do nothing whenever a richer look is
+          already selected in the Studio. */}
+      {activeTab === "effects" && plan && (
+        <div className="mt-3">
+          <label className="text-xs font-semibold text-neutral-500">Color grade</label>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {Object.entries(COLOR_GRADES).map(([key, g]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setPlan({ ...plan, colorGrade: key });
+                  setStudio({ look: { ...studio.look, grade: key } });
+                }}
+                className={`rounded-full px-3 py-1 text-xs ${
+                  studio.look.grade === key
+                    ? "bg-accent font-semibold text-white"
+                    : "border border-card-border text-neutral-400"
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
           </div>
+        </div>
+      )}
 
-          {costEstimate && (
+      {plan && (
+        <div className="mt-5">
+        {costEstimate && (
             <div
               className={`mt-4 flex items-start gap-2 rounded-xl px-3 py-2 text-[11px] leading-4 ${
                 costEstimate.level === "heavy"
@@ -1987,9 +2031,7 @@ export default function EditorPage() {
               <video src={draftUrl} controls playsInline className="mx-auto max-h-72 rounded-lg" />
             </div>
           )}
-          <ChatEdit onRender={handleRender} busy={busy} setBusy={setBusy} />
-          <InsightsPanel />
-        </section>
+        </div>
       )}
 
       {busy && (

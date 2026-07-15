@@ -36,6 +36,11 @@ import {
 import {
   makeItem, addItem, removeItem, renameItem, itemsOfKind, searchItems, libraryStats, exportLibrary, importLibrary, mergeLibrary,
 } from "../src/lib/library.ts";
+import {
+  planFromClips, addClipAsSegment, moveSegment, reorderSegmentsByIds, trimSegment, setSegmentSpeed,
+  splitSegmentAt, deleteSegment, totalOutputDuration, locateAtOutputTime, sourceTimeInSegment, MIN_SEGMENT_SECONDS,
+} from "../src/lib/timeline-edit.ts";
+import { computeTips } from "../src/lib/assistant-tips.ts";
 
 let passed = 0;
 let failed = 0;
@@ -900,6 +905,123 @@ test("mergeLibrary dedupes by id keeping newer", () => {
   const merged = mergeLibrary(a, b);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((x) => x.id === "x").name, "new");
+});
+
+// --- timeline-edit.ts (manual timeline ops) ---------------------------------------
+
+console.log("\ntimeline-edit.ts");
+test("planFromClips builds one full-length segment per clip", () => {
+  const p = planFromClips(CLIPS);
+  assert.equal(p.segments.length, 2);
+  assert.equal(p.segments[0].clipId, "a");
+  assert.equal(p.segments[0].start, 0);
+  assert.equal(p.segments[0].end, 20);
+  assert.equal(p.segments[0].transitionAfter, "hard-cut");
+  assert.equal(p.segments[0].speed, 1);
+});
+test("addClipAsSegment creates a plan from null, or appends to an existing one", () => {
+  const fresh = addClipAsSegment(null, CLIPS[0]);
+  assert.equal(fresh.segments.length, 1);
+  const appended = addClipAsSegment(fresh, CLIPS[1]);
+  assert.equal(appended.segments.length, 2);
+  assert.equal(appended.segments[1].clipId, "b");
+  assert.equal(appended.segments[1].end, 8);
+});
+test("moveSegment reorders and no-ops on an out-of-range index", () => {
+  const moved = moveSegment(PLAN, 0, 2);
+  assert.deepEqual(moved.segments.map((s) => s.id), ["s2", "s3", "s1"]);
+  assert.equal(moveSegment(PLAN, 0, 99), PLAN);
+  assert.equal(moveSegment(PLAN, 1, 1), PLAN);
+});
+test("reorderSegmentsByIds applies an explicit order, refuses a partial list", () => {
+  const reordered = reorderSegmentsByIds(PLAN, ["s3", "s1", "s2"]);
+  assert.deepEqual(reordered.segments.map((s) => s.id), ["s3", "s1", "s2"]);
+  assert.equal(reorderSegmentsByIds(PLAN, ["s1", "s2"]), PLAN);
+});
+test("trimSegment clamps to the clip's own duration and a minimum length", () => {
+  const trimmed = trimSegment(PLAN, "s1", { start: 2, end: 5 }, 20);
+  const s1 = trimmed.segments.find((s) => s.id === "s1");
+  assert.equal(s1.start, 2);
+  assert.equal(s1.end, 5);
+  const overStart = trimSegment(PLAN, "s1", { start: 25 }, 20);
+  assert.ok(overStart.segments.find((s) => s.id === "s1").start <= 20 - MIN_SEGMENT_SECONDS);
+  const collapsed = trimSegment(PLAN, "s1", { start: 5, end: 5.05 }, 20);
+  const c1 = collapsed.segments.find((s) => s.id === "s1");
+  assert.ok(c1.end - c1.start >= MIN_SEGMENT_SECONDS - 1e-9);
+});
+test("setSegmentSpeed clamps to [0.25, 4]", () => {
+  assert.equal(setSegmentSpeed(PLAN, "s1", 2).segments.find((s) => s.id === "s1").speed, 2);
+  assert.equal(setSegmentSpeed(PLAN, "s1", 100).segments.find((s) => s.id === "s1").speed, 4);
+  assert.equal(setSegmentSpeed(PLAN, "s1", 0).segments.find((s) => s.id === "s1").speed, 0.25);
+});
+test("splitSegmentAt splits one segment into two hard-cut-joined halves", () => {
+  const split = splitSegmentAt(PLAN, "s1", 3); // s1 spans source 1..6
+  assert.equal(split.segments.length, 4);
+  const [a, b] = split.segments;
+  assert.equal(a.end, 3);
+  assert.equal(b.start, 3);
+  assert.equal(a.transitionAfter, "hard-cut");
+  assert.equal(b.transitionAfter, "fade"); // inherited from the original s1
+  assert.equal(a.clipId, "a");
+  assert.equal(b.clipId, "a");
+});
+test("splitSegmentAt is a no-op right at (or outside) a segment's edges", () => {
+  assert.equal(splitSegmentAt(PLAN, "s1", 1).segments.length, 3);
+  assert.equal(splitSegmentAt(PLAN, "s1", 6).segments.length, 3);
+  assert.equal(splitSegmentAt(PLAN, "s1", 999).segments.length, 3);
+});
+test("deleteSegment removes one, and returns null for the last one standing", () => {
+  const minusOne = deleteSegment(PLAN, "s1");
+  assert.equal(minusOne.segments.length, 2);
+  const single = { ...PLAN, segments: [PLAN.segments[0]] };
+  assert.equal(deleteSegment(single, "s1"), null);
+});
+test("totalOutputDuration sums post-speed segment lengths", () => {
+  // s1: (6-1)/1=5, s2: (3.5-0.5)/2=1.5, s3: (11-8)/1=3 → 9.5
+  assert.equal(totalOutputDuration(PLAN.segments), 9.5);
+});
+test("locateAtOutputTime / sourceTimeInSegment map output time back to source time", () => {
+  const loc = locateAtOutputTime(PLAN.segments, 6); // 5s into s1's output → into s2
+  assert.equal(loc.segment.id, "s2");
+  assert.equal(loc.offset, 1);
+  assert.equal(sourceTimeInSegment(PLAN.segments, "s1", 2), 3); // 2s in, at 1x, from start=1
+  assert.equal(sourceTimeInSegment(PLAN.segments, "s2", 2), null); // outside s2's window
+});
+
+// --- assistant-tips.ts (contextual suggestions) -----------------------------------
+
+console.log("\nassistant-tips.ts");
+const BASE_CTX = {
+  clipCount: 0, segmentCount: 0, allSegmentsFullLength: true, hasMusic: false, hasCaptions: false,
+  allHardCuts: true, colorGradeSet: false, autoKenBurnsOn: false, stabilizeOn: false, clipMotion: [],
+};
+test("computeTips nudges to add a clip when the shelf is empty", () => {
+  const tips = computeTips(BASE_CTX);
+  assert.ok(tips.some((t) => t.id === "no-clips"));
+});
+test("computeTips suggests Quick Edit once clips exist but nothing's on the timeline", () => {
+  const tips = computeTips({ ...BASE_CTX, clipCount: 2 });
+  const tip = tips.find((t) => t.id === "nothing-on-timeline");
+  assert.ok(tip);
+  assert.equal(tip.action.kind, "quick-edit");
+});
+test("computeTips flags an untrimmed timeline, silence, all-hard-cuts, and no grade together", () => {
+  const tips = computeTips({ ...BASE_CTX, clipCount: 2, segmentCount: 2 });
+  assert.ok(tips.some((t) => t.id === "nothing-trimmed"));
+  assert.ok(tips.some((t) => t.id === "silent-and-textless"));
+  assert.ok(tips.some((t) => t.id === "all-hard-cuts"));
+  assert.ok(tips.some((t) => t.id === "no-grade"));
+});
+test("computeTips quiets down once music, captions, a trim, a transition, and a grade are all in place", () => {
+  const tips = computeTips({
+    ...BASE_CTX, clipCount: 2, segmentCount: 2, allSegmentsFullLength: false,
+    hasMusic: true, hasCaptions: true, allHardCuts: false, colorGradeSet: true,
+  });
+  assert.equal(tips.length, 0);
+});
+test("computeTips respects the max count", () => {
+  const tips = computeTips({ ...BASE_CTX, clipCount: 2, segmentCount: 2 }, 2);
+  assert.equal(tips.length, 2);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

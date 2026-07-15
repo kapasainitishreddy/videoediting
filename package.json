@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "postinstall": "node scripts/copy-ffmpeg-core.js",
-    "test:e2e": "node scripts/e2e-test.mjs",
+    "test:e2e": "node scripts/e2e-test.mjs && node scripts/e2e-manual-timeline-test.mjs",
     "test:xfade": "node scripts/xfade-check.mjs",
     "test:unit": "tsx scripts/track-test.mjs && tsx scripts/features-test.mjs"
   },

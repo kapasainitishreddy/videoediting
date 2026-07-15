@@ -114,15 +114,15 @@ await page.waitForSelector("img[alt='clip-b.webm']", { timeout: 30000 });
 console.log("   2 clips added with thumbnails");
 
 // ---- 4. AI direction + auto-edit
-// The editor defaults to Beginner mode (Quick Edit — a transition-style
-// picker, no direction box). Switch to Pro to exercise the full direction
-// + Studio + Pro Tools pipeline this test drives.
+// The editor opens on the Edit tab (Quick Edit + the manual timeline);
+// "Direct the AI" and the Auto-edit button live in the AI tab.
 console.log("4) auto-editing…");
-await page.click("text=/^pro$/i");
+await page.click('button:text-is("AI")');
 await page.fill("textarea", "make it smooth and cinematic");
 await page.click("text=Auto-edit my clips");
-await page.waitForSelector("text=Timeline", { timeout: 30000 });
-const explanation = await page.locator("p.text-xs.leading-5").first().textContent();
+// A completed AI edit jumps back to the Edit tab so the result is visible.
+await page.waitForSelector("text=Your edit", { timeout: 30000 });
+const explanation = await page.locator("p.mb-3.text-xs.leading-5").first().textContent();
 console.log(`   plan: ${explanation?.slice(0, 140)}`);
 
 // ---- 5. Render. NOTE: headless Chromium has no H.264 decoder, so we
