@@ -18,7 +18,17 @@ export type TransitionType =
   | "radial-wipe"
   | "squeeze"
   | "luma-slice"
-  | "iris";
+  | "iris"
+  | "wipe-up"
+  | "wipe-down"
+  | "slide-up"
+  | "slide-down"
+  | "rect-crop"
+  | "diagonal"
+  | "vert-open"
+  | "horz-open"
+  | "cover-up"
+  | "reveal-left";
 
 export interface DetectedTransition {
   id: string;

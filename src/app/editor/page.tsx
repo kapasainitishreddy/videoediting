@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Captions, ChevronDown, Crosshair, Eraser, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Captions, ChevronDown, Crosshair, Eraser, GripVertical, Mic, Music, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { v4 as uuid } from "uuid";
 import { saveVideo, getVideo, saveClipMeta, deleteClipMeta, listClipMetas, deleteVideo, savePlan, saveRenderedVideo } from "@/lib/storage";
 import { probeDuration, makeThumbnail, renderEdit, getFFmpeg, type BurnCaption, type RenderOptions } from "@/lib/ffmpeg-client";
@@ -40,6 +40,8 @@ import ChatEdit from "@/components/ChatEdit";
 import { interpretMotionGfx } from "@/lib/motion-gfx";
 import { interpretVibe } from "@/lib/vibe-music";
 import CommandPalette from "@/components/CommandPalette";
+import ManualTimeline from "@/components/ManualTimeline";
+import { seedPlanFromClips } from "@/lib/manual-timeline";
 import { TRANSITIONS, transitionByType, COLOR_GRADES } from "@/lib/transitions";
 import { useProject } from "@/store/project";
 import type { TransitionType, UserClip } from "@/lib/types";
@@ -721,6 +723,12 @@ export default function EditorPage() {
   // Reads/writes the store directly (useProject.getState()) rather than the
   // React-hook `plan` value, which won't reflect setPlan() until the next
   // render — the effect below picks up the change once that render happens.
+  // Skip the AI entirely: seed a one-segment-per-clip plan (hard cuts, full
+  // duration) so the manual timeline has something to drag/trim/split.
+  function handleManualStart() {
+    if (!plan) setPlan(seedPlanFromClips(clips));
+  }
+
   async function handleQuickCreate() {
     await handleAutoEdit();
     const fresh = useProject.getState().plan;
@@ -1513,6 +1521,14 @@ export default function EditorPage() {
             >
               <Wand2 size={17} /> {plan ? "Re-create & render" : "Create & render my edit"}
             </button>
+            {!plan && clips.length > 0 && (
+              <button
+                onClick={handleManualStart}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 py-2 text-xs font-semibold text-neutral-400 active:text-accent"
+              >
+                <GripVertical size={13} /> Or edit it manually — no AI
+              </button>
+            )}
             {clips.length === 0 && (
               <p className="mt-2 text-center text-[11px] text-neutral-600">Add a clip above first.</p>
             )}
@@ -1643,6 +1659,14 @@ export default function EditorPage() {
             >
               <Wand2 size={17} /> {plan ? "Re-edit with AI" : "Auto-edit my clips"}
             </button>
+            {!plan && clips.length > 0 && (
+              <button
+                onClick={handleManualStart}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 py-2 text-xs font-semibold text-neutral-400 active:text-accent"
+              >
+                <GripVertical size={13} /> Or edit it manually — no AI
+              </button>
+            )}
           </section>
 
           <StudioPanel />
@@ -1659,40 +1683,10 @@ export default function EditorPage() {
               <button onClick={undoPlan} className="text-xs text-neutral-500 underline">undo</button>
             )}
           </div>
-          <p className="mb-3 text-xs leading-5 text-neutral-500">{plan.explanation}</p>
-          <div className="flex items-center gap-1 overflow-x-auto pb-2">
-            {plan.segments.map((seg, i) => {
-              const clip = clips.find((c) => c.id === seg.clipId);
-              return (
-                <div key={seg.id} className="flex shrink-0 items-center gap-1">
-                  <div className="relative">
-                    {clip?.thumbnail ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={clip.thumbnail}
-                        alt={`Shot ${i + 1}: ${clip.name}, ${(seg.end - seg.start).toFixed(1)}s`}
-                        className="h-16 w-12 rounded-lg object-cover"
-                      />
-                    ) : (
-                      <div className="stripes h-16 w-12 rounded-lg" />
-                    )}
-                    <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-0.5 font-mono text-[9px]">
-                      {(seg.end - seg.start).toFixed(1)}s
-                    </span>
-                  </div>
-                  {seg.transitionAfter !== null && (
-                    <button
-                      onClick={() => setPickerFor(i)}
-                      className="flex h-11 w-11 items-center justify-center rounded-full border border-card-border bg-card text-base active:border-accent"
-                      aria-label={`Change transition after shot ${i + 1}, currently ${transitionByType(seg.transitionAfter).label}`}
-                    >
-                      {transitionByType(seg.transitionAfter).emoji}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <p className="mb-3 text-xs leading-5 text-neutral-500">
+            {plan.explanation} · Tap a shot to trim, drag its top bar to reorder.
+          </p>
+          <ManualTimeline plan={plan} clips={clips} setPlan={setPlan} onPickTransition={setPickerFor} />
 
           {/* Section looks: adjustment-layer-style grade override per shot */}
           <div className="mt-1 flex items-center gap-1 overflow-x-auto pb-1">
@@ -2020,11 +2014,12 @@ export default function EditorPage() {
       {pickerFor !== null && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/70" onClick={() => setPickerFor(null)}>
           <div
-            className="slide-up mx-auto w-full max-w-md rounded-t-3xl border-t border-card-border bg-card p-5 pb-8"
+            className="slide-up mx-auto flex w-full max-w-md flex-col rounded-t-3xl border-t border-card-border bg-card p-5 pb-8"
+            style={{ maxHeight: "80vh" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="mb-4 text-center text-sm font-bold">Pick a transition</h3>
-            <div className="grid grid-cols-3 gap-2">
+            <h3 className="mb-4 shrink-0 text-center text-sm font-bold">Pick a transition</h3>
+            <div className="grid grid-cols-3 gap-2 overflow-y-auto">
               {TRANSITIONS.map((t) => (
                 <button
                   key={t.type}

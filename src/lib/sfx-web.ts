@@ -22,12 +22,15 @@ import { renderSfxPreview, type SfxType } from "./audio-cinema";
 // just add latency before the local fallback every render.)
 export const SFX_REMOTE: Partial<Record<SfxType, string[]>> = {};
 
-// Bundled local files (served from the app origin → cached by the SW).
-const LOCAL: Record<SfxType, string> = {
-  whoosh: "/sfx/whoosh.wav",
-  impact: "/sfx/impact.wav",
-  glitch: "/sfx/glitch.wav",
-  riser: "/sfx/riser.wav",
+// Bundled local files (served from the app origin → cached by the SW), tried
+// in order. impact/glitch lead with real CC0 recordings (Kenney.nl — see
+// public/sfx/README.md); the synthesized .wav stays as the fallback for all
+// four so a missing/corrupt real file never breaks a render.
+const LOCAL: Record<SfxType, string[]> = {
+  whoosh: ["/sfx/whoosh.wav"],
+  impact: ["/sfx/impact-kenney.ogg", "/sfx/impact.wav"],
+  glitch: ["/sfx/glitch-kenney.ogg", "/sfx/glitch.wav"],
+  riser: ["/sfx/riser.wav"],
 };
 
 export type SfxManifest = Record<SfxType, string[]>;
@@ -35,7 +38,7 @@ export type SfxManifest = Record<SfxType, string[]>;
 export function defaultManifest(): SfxManifest {
   const types: SfxType[] = ["whoosh", "impact", "glitch", "riser"];
   const m = {} as SfxManifest;
-  for (const t of types) m[t] = [...(SFX_REMOTE[t] ?? []), LOCAL[t]];
+  for (const t of types) m[t] = [...(SFX_REMOTE[t] ?? []), ...LOCAL[t]];
   return m;
 }
 

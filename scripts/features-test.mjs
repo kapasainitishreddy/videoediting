@@ -36,6 +36,10 @@ import {
 import {
   makeItem, addItem, removeItem, renameItem, itemsOfKind, searchItems, libraryStats, exportLibrary, importLibrary, mergeLibrary,
 } from "../src/lib/library.ts";
+import {
+  seedPlanFromClips, appendClipToPlan, removeSegment, reorderSegments, trimSegment, splitSegment, MIN_SEGMENT,
+  totalTimelineDuration, timeAtPlayhead,
+} from "../src/lib/manual-timeline.ts";
 
 let passed = 0;
 let failed = 0;
@@ -900,6 +904,115 @@ test("mergeLibrary dedupes by id keeping newer", () => {
   const merged = mergeLibrary(a, b);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((x) => x.id === "x").name, "new");
+});
+
+// --- manual-timeline.ts -----------------------------------------------------
+
+const MT_CLIPS = [
+  { id: "a", name: "talk.mp4", duration: 20 },
+  { id: "b", name: "broll.mp4", duration: 8 },
+];
+
+test("seedPlanFromClips: one full-duration segment per clip, hard cuts, last transition null", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  assert.equal(plan.segments.length, 2);
+  assert.deepEqual(plan.segments.map((s) => [s.clipId, s.start, s.end]), [["a", 0, 20], ["b", 0, 8]]);
+  assert.equal(plan.segments[0].transitionAfter, "hard-cut");
+  assert.equal(plan.segments[1].transitionAfter, null);
+});
+
+test("appendClipToPlan adds a segment and fixes up the old last segment's transition", () => {
+  const plan = seedPlanFromClips([MT_CLIPS[0]]);
+  const next = appendClipToPlan(plan, MT_CLIPS[1]);
+  assert.equal(next.segments.length, 2);
+  assert.equal(next.segments[0].transitionAfter, "hard-cut");
+  assert.equal(next.segments[1].transitionAfter, null);
+});
+
+test("removeSegment drops the segment and keeps the last-transition-null invariant", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const next = removeSegment(plan, plan.segments[0].id);
+  assert.equal(next.segments.length, 1);
+  assert.equal(next.segments[0].clipId, "b");
+  assert.equal(next.segments[0].transitionAfter, null);
+});
+
+test("reorderSegments moves a segment and re-nulls the new last transition", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const next = reorderSegments(plan, 0, 1);
+  assert.deepEqual(next.segments.map((s) => s.clipId), ["b", "a"]);
+  assert.equal(next.segments[0].transitionAfter, "hard-cut");
+  assert.equal(next.segments[1].transitionAfter, null);
+});
+
+test("reorderSegments is a no-op for an out-of-range fromIndex", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const next = reorderSegments(plan, 5, 0);
+  assert.deepEqual(next, plan);
+});
+
+test("trimSegment clamps the start handle to [0, end - MIN_SEGMENT]", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const seg = plan.segments[0]; // clip "a", 0..20
+  const dragged = trimSegment(plan, seg.id, MT_CLIPS[0], "start", -5);
+  assert.equal(dragged.segments[0].start, 0);
+  const overshot = trimSegment(plan, seg.id, MT_CLIPS[0], "start", 25);
+  assert.equal(overshot.segments[0].start, 20 - MIN_SEGMENT);
+});
+
+test("trimSegment clamps the end handle to [start + MIN_SEGMENT, clip.duration]", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const seg = plan.segments[0];
+  const overshot = trimSegment(plan, seg.id, MT_CLIPS[0], "end", 999);
+  assert.equal(overshot.segments[0].end, 20);
+  const undershot = trimSegment(plan, seg.id, MT_CLIPS[0], "end", -1);
+  assert.equal(undershot.segments[0].end, MIN_SEGMENT);
+});
+
+test("splitSegment cuts one segment into two adjoining segments with a hard cut between", () => {
+  const plan = seedPlanFromClips([MT_CLIPS[0]]);
+  const seg = plan.segments[0]; // 0..20
+  const next = splitSegment(plan, seg.id, 8);
+  assert.equal(next.segments.length, 2);
+  assert.equal(next.segments[0].end, 8);
+  assert.equal(next.segments[1].start, 8);
+  assert.equal(next.segments[0].transitionAfter, "hard-cut");
+  assert.equal(next.segments[1].transitionAfter, null);
+});
+
+test("splitSegment refuses a cut too close to either edge", () => {
+  const plan = seedPlanFromClips([MT_CLIPS[0]]);
+  const seg = plan.segments[0]; // 0..20
+  const tooEarly = splitSegment(plan, seg.id, 0.05);
+  assert.equal(tooEarly.segments.length, 1);
+  const tooLate = splitSegment(plan, seg.id, 19.99);
+  assert.equal(tooLate.segments.length, 1);
+});
+
+test("totalTimelineDuration sums trimmed segment lengths", () => {
+  const plan = seedPlanFromClips(MT_CLIPS); // 20 + 8
+  assert.equal(totalTimelineDuration(plan.segments), 28);
+});
+
+test("timeAtPlayhead resolves the right segment and local clip time", () => {
+  const plan = seedPlanFromClips(MT_CLIPS); // seg0: clip a 0..20, seg1: clip b 0..8
+  const early = timeAtPlayhead(plan.segments, 5);
+  assert.equal(early.segment.clipId, "a");
+  assert.equal(early.localTime, 5);
+  const late = timeAtPlayhead(plan.segments, 23);
+  assert.equal(late.segment.clipId, "b");
+  assert.equal(late.localTime, 3); // 23 - 20
+});
+
+test("timeAtPlayhead clamps past the end to the last segment's end", () => {
+  const plan = seedPlanFromClips(MT_CLIPS);
+  const past = timeAtPlayhead(plan.segments, 999);
+  assert.equal(past.segment.clipId, "b");
+  assert.equal(past.localTime, 8);
+});
+
+test("timeAtPlayhead returns null for an empty timeline", () => {
+  assert.equal(timeAtPlayhead([], 0), null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
