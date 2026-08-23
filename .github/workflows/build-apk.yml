@@ -1,28 +1,14 @@
 name: Build Android APK
 
-# Builds the SELF-CONTAINED Android app: the entire web app (static export,
-# including the FFmpeg + MediaPipe WASM engines) is bundled inside the APK
-# via Capacitor — no server, no hosting, works fully offline. The optional
-# /api cloud features (AI refinement, Whisper, TTS, stock search, reel
-# download) aren't in the bundle and degrade to their built-in
-# "unavailable" messages; see android/BUNDLED_APK.md.
-#
-# The finished, debug-signed app-debug.apk is attached to the run as the
-# `viraledit-apk` artifact. This build can't run in the authoring sandbox
-# (no Android SDK, dl.google.com blocked) — GitHub's runners have both.
+# The self-contained Android APK is an explicit build artifact. Run this from
+# the Actions tab when an installable APK is needed; routine source pushes do
+# not run the full static export + Capacitor + Gradle toolchain.
 on:
-  push:
-    branches: [claude/ai-video-editing-app-vrohjm]
-    paths:
-      - "android/**"
-      - "src/**"
-      - "public/**"
-      - "capacitor.config.ts"
-      - "next.config.ts"
-      - "package.json"
-      - "scripts/build-static.mjs"
-      - ".github/workflows/build-apk.yml"
   workflow_dispatch: {}
+
+concurrency:
+  group: viraledit-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -33,7 +19,6 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Capacitor CLI 8 refuses to run on anything below Node 22
           node-version: "22"
           cache: "npm"
 
