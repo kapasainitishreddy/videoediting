@@ -1,18 +1,13 @@
 name: Deploy to Netlify
 
-# Deploys the web app to the Netlify project the Android TWA shell points
-# at (viraledit-ai.netlify.app). Requires two repo secrets, both free to
-# get from Netlify in under a minute:
-#   NETLIFY_AUTH_TOKEN — netlify.com → User settings → Applications →
-#     New access token
-#   NETLIFY_SITE_ID    — 7a2b7fa7-c254-480f-8eac-a232f9004d7d (already
-#     created; or run `netlify sites:list` for your own)
-# Without these secrets this workflow no-ops rather than failing loudly —
-# add them in Settings → Secrets and variables → Actions, then re-run.
+# Production deployment is intentional/manual. Routine authoring branch pushes
+# should not run another install + Netlify production build/deploy.
 on:
-  push:
-    branches: [claude/ai-video-editing-app-vrohjm]
   workflow_dispatch: {}
+
+concurrency:
+  group: viraledit-netlify-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -43,10 +38,6 @@ jobs:
 
       - name: Deploy to Netlify
         if: steps.check.outputs.skip == 'false'
-        # netlify-cli invokes netlify.toml's [build] command itself and
-        # runs the official @netlify/plugin-nextjs — that's what converts
-        # the API routes into Netlify Functions, so this must be `deploy
-        # --build`, not a plain static publish of a pre-built .next folder.
         run: npx -y netlify-cli deploy --build --prod
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
