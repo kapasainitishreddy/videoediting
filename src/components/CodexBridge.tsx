@@ -3,6 +3,9 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useProject } from "@/store/project";
+import { getVideo, savePlan } from "@/lib/storage";
+import { smartAutoEdit } from "@/lib/auto-edit";
+import { applyPlanOps, compileDirection } from "@/lib/prompt-compiler";
 import type { CodexBridgeStatus, CodexCommand } from "@/lib/codex-control";
 
 const SAFE_ROUTES = new Set(["/", "/home", "/editor", "/marketing", "/features", "/export"]);
@@ -15,6 +18,10 @@ async function post(body: Record<string, unknown>): Promise<void> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Codex bridge HTTP ${res.status}`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function dispatchAndWait(
@@ -62,6 +69,26 @@ function currentStatus(busy: string | null): CodexBridgeStatus {
   };
 }
 
+function applyCompiledDirection(direction: string): void {
+  if (!direction.trim()) return;
+  const compiled = compileDirection(direction);
+  const state = useProject.getState();
+  const cur = state.studio;
+  const studio = compiled.studio;
+  const patch: Partial<typeof cur> = {};
+
+  if (studio.motionDefault !== undefined) patch.motionDefault = studio.motionDefault;
+  if (studio.autoKenBurns !== undefined) patch.autoKenBurns = studio.autoKenBurns;
+  if (studio.autoReframe !== undefined) patch.autoReframe = studio.autoReframe;
+  if (studio.overlay !== undefined) patch.overlay = studio.overlay;
+  if (studio.overlayOpacity !== undefined) patch.overlayOpacity = studio.overlayOpacity;
+  if (studio.scoreMood !== undefined) patch.scoreMood = studio.scoreMood;
+  if (studio.autoSfx !== undefined) patch.autoSfx = studio.autoSfx;
+  if (studio.kineticCaptions !== undefined) patch.kineticCaptions = studio.kineticCaptions;
+  if (Object.keys(studio.look).length) patch.look = { ...cur.look, ...studio.look };
+  if (Object.keys(patch).length) state.setStudio(patch);
+}
+
 export default function CodexBridge() {
   const router = useRouter();
   const polling = useRef(false);
@@ -91,6 +118,71 @@ export default function CodexBridge() {
   useEffect(() => {
     let stopped = false;
 
+    const runAutoEdit = async (direction: string) => {
+      const state = useProject.getState();
+      if (state.clips.length === 0) throw new Error("No clips are loaded in ViralEdit yet.");
+
+      activeCommand.current = "auto-edit: loading clips";
+      const clipBlobs = new Map<string, Blob>();
+      for (const clip of state.clips) {
+        const video = await getVideo(clip.id);
+        if (video) clipBlobs.set(clip.id, video.blob);
+      }
+      if (clipBlobs.size === 0) throw new Error("ViralEdit clip metadata exists, but the IndexedDB video blobs are missing.");
+
+      const plan = await smartAutoEdit({
+        blueprint: state.blueprint,
+        clips: state.clips,
+        clipBlobs,
+        direction,
+        beats: null,
+        onProgress: (message) => {
+          activeCommand.current = `auto-edit: ${message}`;
+        },
+      });
+
+      if (direction.trim()) {
+        const compiled = compileDirection(direction);
+        if (compiled.plan.colorGrade) plan.colorGrade = compiled.plan.colorGrade;
+        if (compiled.plan.transitionCycle || compiled.plan.transitionMap) {
+          plan.segments = applyPlanOps(plan.segments, {
+            transitionCycle: compiled.plan.transitionCycle,
+            transitionMap: compiled.plan.transitionMap,
+          });
+        }
+        if (compiled.notes.length) plan.explanation += ` Pipeline: ${compiled.summary}.`;
+        applyCompiledDirection(direction);
+      }
+
+      state.setPlan(plan);
+      await savePlan("current", plan);
+      if (window.location.pathname !== "/editor") router.push("/editor");
+
+      return {
+        message: "Auto-edit created a timeline from the clips currently loaded in ViralEdit.",
+        direction: direction || null,
+        segmentCount: plan.segments.length,
+        colorGrade: plan.colorGrade,
+        explanation: plan.explanation,
+      };
+    };
+
+    const waitForRender = async () => {
+      const deadline = Date.now() + 20 * 60_000;
+      while (!stopped && Date.now() < deadline) {
+        const state = useProject.getState();
+        if (state.renderedUrl || window.location.pathname === "/export") {
+          return {
+            message: "ViralEdit finished rendering and opened the export screen.",
+            route: window.location.pathname,
+            renderedReady: true,
+          };
+        }
+        await sleep(750);
+      }
+      throw new Error("Render did not reach the export screen within 20 minutes.");
+    };
+
     const execute = async (command: CodexCommand): Promise<unknown> => {
       const payload = command.payload ?? {};
       switch (command.kind) {
@@ -115,6 +207,9 @@ export default function CodexBridge() {
         case "chat": {
           const text = typeof payload.text === "string" ? payload.text.trim() : "";
           if (!text) throw new Error("viraledit_edit requires a non-empty instruction");
+          if (window.location.pathname !== "/editor" || !useProject.getState().plan) {
+            throw new Error("Conversational editing needs an existing timeline on /editor. Run viraledit_auto_edit first.");
+          }
           return dispatchAndWait(
             "viraledit:codex-chat",
             "viraledit:codex-chat-result",
@@ -125,27 +220,22 @@ export default function CodexBridge() {
 
         case "auto-edit": {
           const direction = typeof payload.direction === "string" ? payload.direction.trim() : "";
-          if (window.location.pathname !== "/editor") {
-            throw new Error("Auto-edit requires ViralEdit to be on /editor. Use viraledit_navigate first.");
-          }
-          return dispatchAndWait(
-            "viraledit:codex-auto-edit",
-            "viraledit:codex-auto-edit-result",
-            { id: command.id, direction },
-            240_000
-          );
+          return runAutoEdit(direction);
         }
 
-        case "render":
-          if (window.location.pathname !== "/editor") {
-            throw new Error("Render requires ViralEdit to be on /editor. Use viraledit_navigate first.");
+        case "render": {
+          if (window.location.pathname !== "/editor" || !useProject.getState().plan) {
+            throw new Error("Render needs an existing timeline on /editor. Run viraledit_auto_edit first.");
           }
-          return dispatchAndWait(
-            "viraledit:codex-render",
-            "viraledit:codex-render-result",
-            { id: command.id },
-            20 * 60_000
+          await dispatchAndWait(
+            "viraledit:codex-chat",
+            "viraledit:codex-chat-result",
+            { id: command.id, text: "render" },
+            30_000
           );
+          activeCommand.current = "rendering";
+          return waitForRender();
+        }
       }
     };
 
