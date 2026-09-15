@@ -246,7 +246,9 @@ export default function ChatEdit({ onRender, busy, setBusy }: Props) {
     }
   }
 
-  commandRunnerRef.current = runCommand;
+  useEffect(() => {
+    commandRunnerRef.current = runCommand;
+  });
 
   // Codex uses the same conversational executor as the visible chat panel.
   // Keeping this as a CustomEvent bridge avoids a second implementation of
