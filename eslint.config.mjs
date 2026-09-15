@@ -15,6 +15,10 @@ const eslintConfig = defineConfig([
     // Vendor code copied in by postinstall (scripts/copy-ffmpeg-core.js) —
     // not ours to lint, and it's gitignored anyway.
     "public/ffmpeg/**",
+    // MediaPipe's generated WASM loader code is also copied by postinstall.
+    // It contains Emscripten/CommonJS patterns that should not be linted as
+    // application React/TypeScript source.
+    "public/vision/**",
   ]),
   {
     // Build-time Node script, run directly via `node scripts/...` outside
