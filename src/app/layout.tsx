@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Sora } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegistrar from "@/components/ServiceWorkerRegistrar";
+import CodexBridge from "@/components/CodexBridge";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const geistSans = Geist({
@@ -46,6 +47,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const codexBridgeEnabled = process.env.VIRALEDIT_CODEX_BRIDGE === "1";
+
   return (
     <html
       lang="en"
@@ -64,6 +67,7 @@ export default function RootLayout({
           <ErrorBoundary>{children}</ErrorBoundary>
         </div>
         <ServiceWorkerRegistrar />
+        {codexBridgeEnabled && <CodexBridge />}
       </body>
     </html>
   );
