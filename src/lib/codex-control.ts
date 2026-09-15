@@ -66,6 +66,12 @@ function trimHistory(state: CodexControlState): void {
   state.commands = [...finished, ...active].slice(-100);
 }
 
+export function isCodexBridgeAllowed(featureFlag: string | undefined, hostname: string): boolean {
+  if (featureFlag !== "1") return false;
+  const host = hostname.toLowerCase();
+  return host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1";
+}
+
 export function enqueueCodexCommand(
   kind: CodexCommandKind,
   payload: Record<string, unknown> = {},
