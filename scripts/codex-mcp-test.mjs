@@ -51,7 +51,7 @@ const address = mockBridge.address();
 if (!address || typeof address === "string") throw new Error("mock bridge did not bind a TCP port");
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const child = spawn(process.execPath, ["codex-plugin/mcp/server.mjs"], {
+const child = spawn(process.execPath, ["plugins/viraledit/mcp/server.mjs"], {
   cwd: repoRoot,
   env: { ...process.env, VIRALEDIT_URL: `http://127.0.0.1:${address.port}` },
   stdio: ["pipe", "pipe", "inherit"],
