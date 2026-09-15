@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "viraledit": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "codex-plugin/mcp/server.mjs"
+      ],
+      "cwd": "."
+    }
+  }
+}
