@@ -5,11 +5,18 @@ import {
   enqueueCodexCommand,
   getCodexBridgeSnapshot,
   getCodexCommand,
+  isCodexBridgeAllowed,
   takeNextCodexCommand,
   updateCodexHeartbeat,
 } from "../src/lib/codex-control";
 
 __resetCodexControlForTests();
+
+assert.equal(isCodexBridgeAllowed("1", "127.0.0.1"), true);
+assert.equal(isCodexBridgeAllowed("1", "localhost"), true);
+assert.equal(isCodexBridgeAllowed("1", "[::1]"), true);
+assert.equal(isCodexBridgeAllowed("1", "viraledit.example.com"), false);
+assert.equal(isCodexBridgeAllowed(undefined, "127.0.0.1"), false);
 
 const queued = enqueueCodexCommand("chat", { text: "tighten the hook" });
 assert.equal(queued.kind, "chat");
