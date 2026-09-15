@@ -10,7 +10,8 @@
     "postinstall": "node scripts/copy-ffmpeg-core.js",
     "test:e2e": "node scripts/e2e-test.mjs",
     "test:xfade": "node scripts/xfade-check.mjs",
-    "test:unit": "tsx scripts/track-test.mjs && tsx scripts/features-test.mjs"
+    "test:unit": "tsx scripts/track-test.mjs && tsx scripts/features-test.mjs",
+    "test:codex": "tsx scripts/codex-control-test.ts && node scripts/codex-mcp-test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.109.1",
