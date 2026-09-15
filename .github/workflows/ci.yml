@@ -24,6 +24,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate Codex plugin with OpenAI's validator
+        shell: bash
+        run: |
+          python3 -m pip install --quiet pyyaml
+          mkdir -p /tmp/codex-plugin-validator
+          curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/src/assets/samples/plugin-creator/scripts/validate_plugin.py -o /tmp/codex-plugin-validator/validate_plugin.py
+          curl -fsSL https://raw.githubusercontent.com/openai/codex/main/codex-rs/skills/src/assets/samples/plugin-creator/scripts/identifier_validation.py -o /tmp/codex-plugin-validator/identifier_validation.py
+          python3 /tmp/codex-plugin-validator/validate_plugin.py plugins/viraledit
+
+      - name: Codex plugin tests
+        run: npm run test:codex
+
       - name: Lint
         run: npm run lint
 

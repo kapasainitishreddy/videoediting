@@ -30,6 +30,12 @@ interface Props {
   setBusy: (b: string | null) => void;
 }
 
+interface CommandResult {
+  ok: boolean;
+  data?: { reply: string; detail?: string; op?: ChatOp["kind"] };
+  error?: string;
+}
+
 async function decodeAudio(blob: Blob): Promise<{ data: Float32Array; sampleRate: number } | null> {
   try {
     const AC: typeof AudioContext =
@@ -52,6 +58,10 @@ export default function ChatEdit({ onRender, busy, setBusy }: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([{ role: "bot", text: CHAT_GREETING }]);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const commandRunnerRef = useRef<(text: string, echoInChat: boolean) => Promise<CommandResult>>(async () => ({
+    ok: false,
+    error: "Chat editor is not ready yet.",
+  }));
   // snapshot of the plan when the panel first sees one — powers "start over"
   const originalRef = useRef<EditPlan | null>(null);
   useEffect(() => {
@@ -206,22 +216,68 @@ export default function ChatEdit({ onRender, busy, setBusy }: Props) {
     }
   }
 
+  async function runCommand(text: string, echoInChat: boolean): Promise<CommandResult> {
+    const clean = text.trim();
+    if (!clean) return { ok: false, error: "Empty edit instruction." };
+    if (busy) return { ok: false, error: `ViralEdit is busy: ${busy}` };
+
+    if (echoInChat) say({ role: "user", text: clean });
+    const turn = interpretTurn(clean);
+    if (echoInChat) say({ role: "bot", text: turn.reply, suggestions: turn.suggestions });
+    if (!turn.op) return { ok: false, error: turn.reply };
+
+    try {
+      const detail = await execute(turn.op);
+      if (echoInChat && detail) say({ role: "bot", text: detail });
+      return {
+        ok: true,
+        data: {
+          reply: turn.reply,
+          detail: detail ?? undefined,
+          op: turn.op.kind,
+        },
+      };
+    } catch (e) {
+      const error = e instanceof Error ? e.message : "try rephrasing.";
+      if (echoInChat) say({ role: "bot", text: `That didn't work — ${error}` });
+      return { ok: false, error };
+    } finally {
+      if (turn.op.kind !== "render") setBusy(null);
+    }
+  }
+
+  useEffect(() => {
+    commandRunnerRef.current = runCommand;
+  });
+
+  // Codex uses the same conversational executor as the visible chat panel.
+  // Keeping this as a CustomEvent bridge avoids a second implementation of
+  // timeline surgery, audio-gap detection, hook variants, or render triggers.
+  useEffect(() => {
+    const onCodexCommand = (event: Event) => {
+      const custom = event as CustomEvent<{ id?: string; text?: string }>;
+      const id = custom.detail?.id?.trim();
+      const text = custom.detail?.text?.trim();
+      if (!id || !text) return;
+
+      void commandRunnerRef.current(text, false).then((result) => {
+        window.dispatchEvent(
+          new CustomEvent("viraledit:codex-chat-result", {
+            detail: { id, ...result },
+          })
+        );
+      });
+    };
+
+    window.addEventListener("viraledit:codex-chat", onCodexCommand as EventListener);
+    return () => window.removeEventListener("viraledit:codex-chat", onCodexCommand as EventListener);
+  }, []);
+
   async function submit() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    say({ role: "user", text });
-    const turn = interpretTurn(text);
-    say({ role: "bot", text: turn.reply, suggestions: turn.suggestions });
-    if (!turn.op) return;
-    try {
-      const detail = await execute(turn.op);
-      if (detail) say({ role: "bot", text: detail });
-    } catch (e) {
-      say({ role: "bot", text: `That didn't work — ${e instanceof Error ? e.message : "try rephrasing."}` });
-    } finally {
-      if (turn.op.kind !== "render") setBusy(null);
-    }
+    await runCommand(text, true);
   }
 
   return (

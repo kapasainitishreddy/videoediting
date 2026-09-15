@@ -1,0 +1,42 @@
+{
+  "name": "viraledit",
+  "version": "0.1.0",
+  "description": "Operate the local-first ViralEdit AI video editor from Codex through reversible editing commands, auto-editing, and real browser-side rendering.",
+  "author": {
+    "name": "kapasainitishreddy",
+    "url": "https://github.com/kapasainitishreddy"
+  },
+  "homepage": "https://github.com/kapasainitishreddy/videoediting",
+  "repository": "https://github.com/kapasainitishreddy/videoediting",
+  "keywords": [
+    "video-editing",
+    "reels",
+    "shorts",
+    "tiktok",
+    "instagram",
+    "codex",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ViralEdit AI",
+    "shortDescription": "Operate ViralEdit's local AI video editor from Codex",
+    "longDescription": "ViralEdit AI lets Codex inspect and operate a live local ViralEdit editing session. It can build a timeline from clips already loaded in the browser, apply reversible natural-language edit instructions, undo changes, navigate the editor, and render through ViralEdit's existing FFmpeg-WASM pipeline while the footage stays in browser storage.",
+    "developerName": "ViralEdit AI",
+    "category": "Creativity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/kapasainitishreddy/videoediting",
+    "defaultPrompt": [
+      "Check my ViralEdit project and tell me what is loaded.",
+      "Auto-edit my loaded clips into a punchy Reel.",
+      "Tighten the hook, then render the final edit."
+    ],
+    "brandColor": "#8B5CF6",
+    "screenshots": []
+  }
+}

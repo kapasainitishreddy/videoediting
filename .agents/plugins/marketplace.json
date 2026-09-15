@@ -1,0 +1,20 @@
+{
+  "name": "viraledit-local",
+  "interface": {
+    "displayName": "ViralEdit Local"
+  },
+  "plugins": [
+    {
+      "name": "viraledit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/viraledit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Creativity"
+    }
+  ]
+}
